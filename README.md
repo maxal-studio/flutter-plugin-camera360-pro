@@ -86,6 +86,7 @@ Camera360(
   // ── Stitching (native OpenCV pipeline) ─────────────────────────────────────
   stitchModel: StitchFeatureModel.sift,
   stitchLoop360: true,
+  stitchLoopClosure: true,          // tonal wrap-seam fix (360° only)
   stitchCrop: StitchCropMode.inner,
   stitchFallback: true,
   stitchFill: true,
@@ -103,7 +104,9 @@ Camera360(
       print('Panorama saved: ${panorama.path}');
     }
   },
-  onProgressChanged: (percent) => print('Progress: $percent%'),
+  onProgressChanged: (percent) => print('Capture: $percent%'),
+  // Optional: replace the built-in stitch overlay (see "Stitch progress" below)
+  // stitchingProgressBuilder: (context, stage, percent) => MyStitchOverlay(...),
 ),
 ```
 
@@ -117,7 +120,7 @@ Camera360(
 | `captureVerticalDeg`  | `double`  | `90`                            | Vertical angle the device should be held at (0..180; 90 = horizon) |
 | `captureImageWidth`   | `int?`    | `1000`                          | Width each captured frame is resized to before stitching           |
 | `captureImageQuality` | `int?`    | `50`                            | JPEG quality for frame resize (1–100)                              |
-| `loadingText`         | `String?` | `'Preparing panorama...'`       | Overlay text shown while stitching                                 |
+| `loadingText`         | `String?` | `'Preparing panorama...'`       | Fallback label before stitch progress starts (see Stitch progress) |
 | `helperText`          | `String?` | `'Point the camera at the dot'` | Instruction text during capture                                    |
 | `tiltLeftText`        | `String?` | `'Tilt left'`                   | Text shown when the device needs tilting left                      |
 | `tiltRightText`       | `String?` | `'Tilt right'`                  | Text shown when the device needs tilting right                     |
@@ -131,6 +134,7 @@ All options below are passed to the native `stitch()` function.
 | `stitchModel`         | `StitchFeatureModel` | `sift`  | Feature detector: `sift`, `orb`, `akaze`, `brisk`, or `onnx`                                        |
 | `onnxModelAssetKey`   | `String?`            | `null`  | Flutter asset key for the SuperPoint + LightGlue ONNX model (required when `stitchModel` is `onnx`) |
 | `stitchLoop360`       | `bool`               | `true`  | Match last frame to first for a closed 360° loop                                                    |
+| `stitchLoopClosure`   | `bool`               | `true`  | Lightweight tonal alignment + feather at the wrap seam (only when `stitchLoop360` is true)          |
 | `stitchCrop`          | `StitchCropMode`     | `inner` | `none` — full canvas; `bbox` — tight bounding box; `inner` — largest rectangle with no black wedges |
 | `stitchFallback`      | `bool`               | `true`  | Synthesize homographies for failed adjacent pairs                                                   |
 | `stitchFill`          | `bool`               | `true`  | Pad top/bottom with blurred edge fill                                                               |
@@ -143,6 +147,48 @@ All options below are passed to the native `stitch()` function.
 
 `stitchCrop` and `stitchFill` are independent: e.g. `stitchCrop: StitchCropMode.none` with `stitchFill: true` still fills black wedges using a per-column boundary.
 
+## Stitch progress
+
+While frames are being stitched, the plugin reports live **stage** and **overall percent** (0–100) for both OpenCV and ONNX pipelines. Feature finding and matching take the largest share of the bar; composition stages share the remainder.
+
+| Pipeline                  | Typical stages shown                                                                         |
+| ------------------------- | -------------------------------------------------------------------------------------------- |
+| OpenCV (`sift`, `orb`, …) | Detecting features → Matching features → Bundle adjustment → Warping → Blending → Finalising |
+| ONNX                      | Preprocessing → Matching features → _(native compose stages)_                                |
+
+**Capture vs stitch:** `onProgressChanged` tracks rotation progress during capture only. Stitch progress is shown in the loading overlay automatically.
+
+| Parameter                  | Type                        | Default | Description                                                        |
+| -------------------------- | --------------------------- | ------- | ------------------------------------------------------------------ |
+| `stitchingProgressBuilder` | `StitchingProgressBuilder?` | `null`  | Custom stitch overlay; built-in label + bar + percent when omitted |
+
+### Default overlay
+
+If you omit `stitchingProgressBuilder`, a built-in overlay shows the current stage label, a linear progress bar, and the overall percentage.
+
+### Custom overlay
+
+```**dart**
+Camera360(
+  stitchingProgressBuilder: (context, stage, percent) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(stage, style: const TextStyle(color: Colors.white)),
+          const SizedBox(height: 8),
+          LinearProgressIndicator(value: percent / 100),
+          Text('$percent%', style: const TextStyle(color: Colors.white70)),
+        ],
+      ),
+    );
+  },
+  // ...
+)
+```
+
+`stitchingProgressBuilder` receives English stage labels by default; translate them inside the builder for i18n.
+
 ## SuperPoint + LightGlue ONNX feature matching
 
 For higher-quality panoramas (especially in low-texture scenes) you can use a SuperPoint + LightGlue ONNX pipeline instead of OpenCV's built-in detectors.
@@ -151,8 +197,7 @@ For higher-quality panoramas (especially in low-texture scenes) you can use a Su
 
 The model is not bundled with the plugin — you need to include it in your app's assets. Add it to your `pubspec.yaml`:
 
-You can download the modal from : https://github.com/fabio-sim/LightGlue-ONNX/releases/tag/v2.0 (superpoint_lightglue_pipeline.ort.onnx
-)
+You can download the model from: https://github.com/fabio-sim/LightGlue-ONNX/releases/tag/v2.0 (`superpoint_lightglue_pipeline.ort.onnx`)
 
 ```yaml
 flutter:
@@ -184,17 +229,22 @@ import 'package:camera_360/camera_360.dart';
 final panorama = await Stitcher.stitchImages(
   imageFiles,
   model: StitchFeatureModel.sift,
+  loop360: true,
+  loopClosure: true,
   crop: StitchCropMode.inner,
   fill: true,
   fillRatio: 2.0,
+  onStitchProgress: (stage, percent) {
+    print('$stage: $percent%');
+  },
 );
 ```
 
-Stitching runs in a background isolate so the UI stays responsive.
+Stitching runs in a background isolate so the UI stays responsive. Progress is polled from native code on the main isolate (~20 Hz) via `stitch_get_progress`; for ONNX, run `OnnxFeaturePipeline.compute` first and pass the resulting `featuresBlob`, then use the same `onStitchProgress` callback (matching reports 0–65%, compose 65–100%).
 
 ## Example app
 
-The `example/` app includes a **Stitch** button that opens a panel to change all stitching options before capture.
+The `example/` app includes **Capture** and **Stitch** menus to change capture and stitching options before a run. After capture, the built-in stitch progress overlay shows stage and percent while the panorama is composed.
 
 ```bash
 cd example && flutter run

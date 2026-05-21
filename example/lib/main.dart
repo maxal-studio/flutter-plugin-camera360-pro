@@ -37,10 +37,12 @@ class _CameraPageState extends State<CameraPage> {
 
   int _captureNrPhotos = 8;
   double _captureVerticalDeg = 80;
+  bool _debugMode = false;
 
   StitchFeatureModel _stitchModel = StitchFeatureModel.onnx;
   StitchCropMode _stitchCrop = StitchCropMode.none;
   bool _stitchLoop360 = true;
+  bool _stitchLoopClosure = true;
   bool _stitchFallback = true;
   bool _stitchFill = true;
   double _stitchFillRatio = 2.0;
@@ -62,9 +64,11 @@ class _CameraPageState extends State<CameraPage> {
     return Stack(
       children: [
         Camera360(
-          key: ValueKey('capture-$_captureNrPhotos-$_captureVerticalDeg'),
+          key: ValueKey(
+              'capture-$_captureNrPhotos-$_captureVerticalDeg-$_debugMode'),
           photoCount: _captureNrPhotos,
           captureVerticalDeg: _captureVerticalDeg,
+          debug: _debugMode,
           loadingText: 'Preparing panorama...',
           helperText: 'Point the camera at the dot',
           tiltLeftText: 'Tilt left',
@@ -91,6 +95,7 @@ class _CameraPageState extends State<CameraPage> {
           stitchModel: _stitchModel,
           onnxModelAssetKey: 'models/superpoint_lightglue_pipeline.ort.onnx',
           stitchLoop360: _stitchLoop360,
+          stitchLoopClosure: _stitchLoopClosure,
           stitchCrop: _stitchCrop,
           stitchFallback: _stitchFallback,
           stitchFill: _stitchFill,
@@ -167,9 +172,11 @@ class _CameraPageState extends State<CameraPage> {
                   child: _CaptureOptionsPanel(
                     nrPhotos: _captureNrPhotos,
                     verticalDeg: _captureVerticalDeg,
+                    debug: _debugMode,
                     onChanged: (options) => setState(() {
                       _captureNrPhotos = options.nrPhotos;
                       _captureVerticalDeg = options.verticalDeg;
+                      _debugMode = options.debug;
                     }),
                   ),
                 ),
@@ -179,6 +186,7 @@ class _CameraPageState extends State<CameraPage> {
                     model: _stitchModel,
                     crop: _stitchCrop,
                     loop360: _stitchLoop360,
+                    loopClosure: _stitchLoopClosure,
                     fallback: _stitchFallback,
                     fill: _stitchFill,
                     fillRatio: _stitchFillRatio,
@@ -191,6 +199,7 @@ class _CameraPageState extends State<CameraPage> {
                       _stitchModel = options.model;
                       _stitchCrop = options.crop;
                       _stitchLoop360 = options.loop360;
+                      _stitchLoopClosure = options.loopClosure;
                       _stitchFallback = options.fallback;
                       _stitchFill = options.fill;
                       _stitchFillRatio = options.fillRatio;
@@ -251,21 +260,25 @@ class _CaptureOptions {
   const _CaptureOptions({
     required this.nrPhotos,
     required this.verticalDeg,
+    required this.debug,
   });
 
   final int nrPhotos;
   final double verticalDeg;
+  final bool debug;
 }
 
 class _CaptureOptionsPanel extends StatefulWidget {
   const _CaptureOptionsPanel({
     required this.nrPhotos,
     required this.verticalDeg,
+    required this.debug,
     required this.onChanged,
   });
 
   final int nrPhotos;
   final double verticalDeg;
+  final bool debug;
   final ValueChanged<_CaptureOptions> onChanged;
 
   @override
@@ -275,6 +288,7 @@ class _CaptureOptionsPanel extends StatefulWidget {
 class _CaptureOptionsPanelState extends State<_CaptureOptionsPanel> {
   late int _nrPhotos;
   late double _verticalDeg;
+  late bool _debug;
 
   @override
   void initState() {
@@ -286,7 +300,8 @@ class _CaptureOptionsPanelState extends State<_CaptureOptionsPanel> {
   void didUpdateWidget(covariant _CaptureOptionsPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.nrPhotos != widget.nrPhotos ||
-        oldWidget.verticalDeg != widget.verticalDeg) {
+        oldWidget.verticalDeg != widget.verticalDeg ||
+        oldWidget.debug != widget.debug) {
       _syncFromWidget();
     }
   }
@@ -294,11 +309,16 @@ class _CaptureOptionsPanelState extends State<_CaptureOptionsPanel> {
   void _syncFromWidget() {
     _nrPhotos = widget.nrPhotos;
     _verticalDeg = widget.verticalDeg;
+    _debug = widget.debug;
   }
 
   void _notify() {
     widget.onChanged(
-      _CaptureOptions(nrPhotos: _nrPhotos, verticalDeg: _verticalDeg),
+      _CaptureOptions(
+        nrPhotos: _nrPhotos,
+        verticalDeg: _verticalDeg,
+        debug: _debug,
+      ),
     );
   }
 
@@ -346,6 +366,31 @@ class _CaptureOptionsPanelState extends State<_CaptureOptionsPanel> {
               hint: '90° = horizon, < 90° = tilted down, > 90° = tilted up',
               onChanged: (v) {
                 setState(() => _verticalDeg = v);
+                _notify();
+              },
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Debug',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
+                'Save captures to gallery',
+                style: TextStyle(color: Colors.white),
+              ),
+              subtitle: Text(
+                'Each frame is copied to the photo library; cache is still cleared after stitch.',
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+              ),
+              value: _debug,
+              onChanged: (v) {
+                setState(() => _debug = v);
                 _notify();
               },
             ),
@@ -428,6 +473,7 @@ class _StitchOptions {
     required this.model,
     required this.crop,
     required this.loop360,
+    required this.loopClosure,
     required this.fallback,
     required this.fill,
     required this.fillRatio,
@@ -441,6 +487,7 @@ class _StitchOptions {
   final StitchFeatureModel model;
   final StitchCropMode crop;
   final bool loop360;
+  final bool loopClosure;
   final bool fallback;
   final bool fill;
   final double fillRatio;
@@ -456,6 +503,7 @@ class _StitchOptionsPanel extends StatefulWidget {
     required this.model,
     required this.crop,
     required this.loop360,
+    required this.loopClosure,
     required this.fallback,
     required this.fill,
     required this.fillRatio,
@@ -470,6 +518,7 @@ class _StitchOptionsPanel extends StatefulWidget {
   final StitchFeatureModel model;
   final StitchCropMode crop;
   final bool loop360;
+  final bool loopClosure;
   final bool fallback;
   final bool fill;
   final double fillRatio;
@@ -488,6 +537,7 @@ class _StitchOptionsPanelState extends State<_StitchOptionsPanel> {
   late StitchFeatureModel _model;
   late StitchCropMode _crop;
   late bool _loop360;
+  late bool _loopClosure;
   late bool _fallback;
   late bool _fill;
   late double _fillRatio;
@@ -518,6 +568,7 @@ class _StitchOptionsPanelState extends State<_StitchOptionsPanel> {
     _model = widget.model;
     _crop = widget.crop;
     _loop360 = widget.loop360;
+    _loopClosure = widget.loopClosure;
     _fallback = widget.fallback;
     _fill = widget.fill;
     _fillRatio = widget.fillRatio;
@@ -534,6 +585,7 @@ class _StitchOptionsPanelState extends State<_StitchOptionsPanel> {
         model: _model,
         crop: _crop,
         loop360: _loop360,
+        loopClosure: _loopClosure,
         fallback: _fallback,
         fill: _fill,
         fillRatio: _fillRatio,
@@ -592,6 +644,10 @@ class _StitchOptionsPanelState extends State<_StitchOptionsPanel> {
             ),
             _switchTile('Loop 360°', _loop360, (v) {
               setState(() => _loop360 = v);
+              _notify();
+            }),
+            _switchTile('Loop closure', _loopClosure, (v) {
+              setState(() => _loopClosure = v);
               _notify();
             }),
             _switchTile('Match fallback', _fallback, (v) {
@@ -743,11 +799,15 @@ class _StitchOptionsPanelState extends State<_StitchOptionsPanel> {
   Widget _switchTile(
     String label,
     bool value,
-    ValueChanged<bool> onChanged,
-  ) {
+    ValueChanged<bool> onChanged, {
+    String? subtitle,
+  }) {
     return SwitchListTile(
       contentPadding: EdgeInsets.zero,
       title: Text(label, style: const TextStyle(color: Colors.white)),
+      subtitle: subtitle != null
+          ? Text(subtitle, style: TextStyle(color: Colors.grey.shade500, fontSize: 12))
+          : null,
       value: value,
       onChanged: onChanged,
     );

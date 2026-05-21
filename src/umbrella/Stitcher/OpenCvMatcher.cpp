@@ -9,6 +9,8 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include "ProgressTracker.hpp"
+
 namespace camera360 {
 
 namespace {
@@ -67,6 +69,8 @@ void CvMatcher::compute(const std::vector<cv::Mat>&             images,
     features.assign(N, cv::detail::ImageFeatures());
     std::vector<cv::Mat> descriptors(N);
 
+    progress::set(progress::Stage::DetectFeatures, 0);
+
     const auto t_extract_start = Clock::now();
     for (int i = 0; i < N; ++i) {
         const auto ti = Clock::now();
@@ -85,6 +89,7 @@ void CvMatcher::compute(const std::vector<cv::Mat>&             images,
         std::cout << "[" << name_ << "] image " << std::setw(2) << i
                   << ": " << std::setw(5) << features[i].keypoints.size()
                   << " kpts  " << msNow(ti) << " ms\n";
+        progress::set(progress::Stage::DetectFeatures, ((i + 1) * 100) / N);
     }
     std::cout << "[" << name_ << "] extract total: "
               << msNow(t_extract_start) << " ms\n";
@@ -94,8 +99,14 @@ void CvMatcher::compute(const std::vector<cv::Mat>&             images,
                             cv::detail::MatchesInfo());
     auto idx = [&](int i, int j) { return static_cast<size_t>(i) * N + j; };
 
+    progress::set(progress::Stage::MatchFeatures, 0);
+
     const auto t_match_start = Clock::now();
     for (int p = 0; p < n_pairs; ++p) {
+        // Report progress before any continue so the UI keeps advancing
+        // even when individual pairs are skipped.
+        progress::set(progress::Stage::MatchFeatures,
+                      ((p + 1) * 100) / n_pairs);
         const int a = p;
         const int b = (p + 1) % N;
 
@@ -150,6 +161,7 @@ void CvMatcher::compute(const std::vector<cv::Mat>&             images,
 
         detail::mirrorReversePair(fwd, a, b, pairwise_matches[idx(b, a)]);
     }
+    progress::set(progress::Stage::MatchFeatures, 100);
     std::cout << "[" << name_ << "] match total: "
               << msNow(t_match_start) << " ms\n";
 }

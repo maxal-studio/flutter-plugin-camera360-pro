@@ -17,6 +17,7 @@
 #include "MatchFallback.hpp"
 #include "OpenCvMatcher.hpp"
 #include "PanoramicStitcher.hpp"
+#include "ProgressTracker.hpp"
 
 namespace {
 
@@ -118,6 +119,7 @@ bool loadImages(const char*               image_paths,
 
 // Build StitcherOptions from the FFI knobs. Shared by both entry points.
 camera360::StitcherOptions makeOptions(bool        loop_360,
+                                       bool        loop_closure,
                                        const char* crop,
                                        bool        fill,
                                        double      fill_ratio,
@@ -131,6 +133,7 @@ camera360::StitcherOptions makeOptions(bool        loop_360,
     camera360::StitcherOptions opt;
     applyCrop(crop, opt);
     opt.loop_360                  = loop_360;
+    opt.loop_closure              = loop_closure;
     opt.fill_enabled              = fill;
     opt.fill_target_ratio         = fill_ratio;
     opt.fill_source_px            = fill_source;
@@ -194,6 +197,7 @@ extern "C" bool stitch(const char *image_paths,
                        const char *model,
                        const char *out,
                        bool        loop_360,
+                       bool        loop_closure,
                        const char *crop,
                        bool        fallback,
                        bool        fill,
@@ -207,20 +211,28 @@ extern "C" bool stitch(const char *image_paths,
 {
     using Clock = std::chrono::steady_clock;
 
+    camera360::progress::reset(camera360::progress::Mode::WithMatching);
+
     // Wrap the whole body: exceptions must not cross the C ABI.
+    bool ok = false;
     try {
         if (!out || !*out) {
             std::cerr << "stitch: missing output path\n";
+            camera360::progress::finalize();
             return false;
         }
 
         std::vector<std::string> names;
         std::vector<cv::Mat>     images;
-        if (!loadImages(image_paths, names, images)) return false;
+        if (!loadImages(image_paths, names, images)) {
+            camera360::progress::finalize();
+            return false;
+        }
 
         const std::string model_name = resolveModel(model);
         std::cout << "stitch: model=" << model_name
-                  << " loop_360=" << (loop_360 ? "true" : "false") << "\n";
+                  << " loop_360=" << (loop_360 ? "true" : "false")
+                  << " loop_closure=" << (loop_closure ? "true" : "false") << "\n";
 
         // ── Feature extraction + adjacent-pair matching ─────────────────────
         const auto t0 = Clock::now();
@@ -234,19 +246,21 @@ extern "C" bool stitch(const char *image_paths,
                   << " ms\n";
 
         const camera360::StitcherOptions opt = makeOptions(
-            loop_360, crop, fill, fill_ratio, fill_source, fill_blur,
+            loop_360, loop_closure, crop, fill, fill_ratio, fill_source, fill_blur,
             fill_fade, fill_blur_ratio, fill_fade_power, fill_vertical_camera_deg);
 
-        return composeAndWrite(images, std::move(features),
-                               std::move(pairwise_matches),
-                               opt, fallback, out);
+        ok = composeAndWrite(images, std::move(features),
+                             std::move(pairwise_matches),
+                             opt, fallback, out);
     } catch (const std::exception& e) {
         std::cerr << "stitch: exception: " << e.what() << "\n";
-        return false;
+        ok = false;
     } catch (...) {
         std::cerr << "stitch: unknown exception\n";
-        return false;
+        ok = false;
     }
+    camera360::progress::finalize();
+    return ok;
 }
 
 extern "C" bool stitch_with_features(const char    *image_paths,
@@ -254,6 +268,7 @@ extern "C" bool stitch_with_features(const char    *image_paths,
                                      size_t         features_blob_len,
                                      const char    *out,
                                      bool           loop_360,
+                                     bool           loop_closure,
                                      const char    *crop,
                                      bool           fallback,
                                      bool           fill,
@@ -267,22 +282,31 @@ extern "C" bool stitch_with_features(const char    *image_paths,
 {
     using Clock = std::chrono::steady_clock;
 
+    camera360::progress::reset(camera360::progress::Mode::WithoutMatching);
+
+    bool ok = false;
     try {
         if (!out || !*out) {
             std::cerr << "stitch_with_features: missing output path\n";
+            camera360::progress::finalize();
             return false;
         }
         if (!features_blob || features_blob_len == 0) {
             std::cerr << "stitch_with_features: missing features blob\n";
+            camera360::progress::finalize();
             return false;
         }
 
         std::vector<std::string> names;
         std::vector<cv::Mat>     images;
-        if (!loadImages(image_paths, names, images)) return false;
+        if (!loadImages(image_paths, names, images)) {
+            camera360::progress::finalize();
+            return false;
+        }
 
         std::cout << "stitch_with_features: loop_360="
                   << (loop_360 ? "true" : "false")
+                  << " loop_closure=" << (loop_closure ? "true" : "false")
                   << "  blob=" << features_blob_len << " bytes\n";
 
         // ── Rebuild features + matches from the blob ────────────────────────
@@ -291,6 +315,7 @@ extern "C" bool stitch_with_features(const char    *image_paths,
         std::vector<cv::detail::MatchesInfo>    pairwise_matches;
         if (!camera360::buildFromExternalBlob(features_blob, features_blob_len,
                                               images, features, pairwise_matches)) {
+            camera360::progress::finalize();
             return false;
         }
         std::cout << "stitch_with_features: rebuild stage: "
@@ -299,17 +324,24 @@ extern "C" bool stitch_with_features(const char    *image_paths,
                   << " ms\n";
 
         const camera360::StitcherOptions opt = makeOptions(
-            loop_360, crop, fill, fill_ratio, fill_source, fill_blur,
+            loop_360, loop_closure, crop, fill, fill_ratio, fill_source, fill_blur,
             fill_fade, fill_blur_ratio, fill_fade_power, fill_vertical_camera_deg);
 
-        return composeAndWrite(images, std::move(features),
-                               std::move(pairwise_matches),
-                               opt, fallback, out);
+        ok = composeAndWrite(images, std::move(features),
+                             std::move(pairwise_matches),
+                             opt, fallback, out);
     } catch (const std::exception& e) {
         std::cerr << "stitch_with_features: exception: " << e.what() << "\n";
-        return false;
+        ok = false;
     } catch (...) {
         std::cerr << "stitch_with_features: unknown exception\n";
-        return false;
+        ok = false;
     }
+    camera360::progress::finalize();
+    return ok;
+}
+
+extern "C" void stitch_get_progress(int *out_percent, int *out_stage)
+{
+    camera360::progress::snapshot(out_percent, out_stage);
 }

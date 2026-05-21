@@ -40,6 +40,9 @@ class Camera360Bindings {
   /// out              Output panorama file path (.jpg / .png).
   /// loop_360         When true, also match the closing pair (last <-> first)
   /// so a full 360 panorama can be composed.
+  /// loop_closure     When true (and loop_360 is true), run the wrap-seam
+  /// closure pipeline (BA boost, yaw closure, ring-extended
+  /// canvas, period crop, edge repair). Defaults to true.
   /// crop             "none" | "bbox" | "inner".
   /// Controls how the painted area is cropped from the
   /// blended canvas. Independent of `fill`.
@@ -72,6 +75,7 @@ class Camera360Bindings {
     ffi.Pointer<ffi.Char> model,
     ffi.Pointer<ffi.Char> out,
     bool loop_360,
+    bool loop_closure,
     ffi.Pointer<ffi.Char> crop,
     bool fallback,
     bool fill,
@@ -88,6 +92,7 @@ class Camera360Bindings {
       model,
       out,
       loop_360,
+      loop_closure,
       crop,
       fallback,
       fill,
@@ -108,6 +113,7 @@ class Camera360Bindings {
               ffi.Pointer<ffi.Char>,
               ffi.Pointer<ffi.Char>,
               ffi.Bool,
+              ffi.Bool,
               ffi.Pointer<ffi.Char>,
               ffi.Bool,
               ffi.Bool,
@@ -123,6 +129,7 @@ class Camera360Bindings {
           ffi.Pointer<ffi.Char>,
           ffi.Pointer<ffi.Char>,
           ffi.Pointer<ffi.Char>,
+          bool,
           bool,
           ffi.Pointer<ffi.Char>,
           bool,
@@ -147,14 +154,15 @@ class Camera360Bindings {
   /// `image_paths`.
   ///
   /// All other parameters behave identically to `stitch` (image paths,
-  /// output path, crop / fill / fallback / loop_360, etc.). No `model`
-  /// argument is needed because matching is already done.
+  /// output path, crop / fill / fallback / loop_360 / loop_closure, etc.).
+  /// No `model` argument is needed because matching is already done.
   bool stitch_with_features(
     ffi.Pointer<ffi.Char> image_paths,
     ffi.Pointer<ffi.Uint8> features_blob,
     int features_blob_len,
     ffi.Pointer<ffi.Char> out,
     bool loop_360,
+    bool loop_closure,
     ffi.Pointer<ffi.Char> crop,
     bool fallback,
     bool fill,
@@ -172,6 +180,7 @@ class Camera360Bindings {
       features_blob_len,
       out,
       loop_360,
+      loop_closure,
       crop,
       fallback,
       fill,
@@ -193,6 +202,7 @@ class Camera360Bindings {
               ffi.Size,
               ffi.Pointer<ffi.Char>,
               ffi.Bool,
+              ffi.Bool,
               ffi.Pointer<ffi.Char>,
               ffi.Bool,
               ffi.Bool,
@@ -210,6 +220,7 @@ class Camera360Bindings {
           int,
           ffi.Pointer<ffi.Char>,
           bool,
+          bool,
           ffi.Pointer<ffi.Char>,
           bool,
           bool,
@@ -220,4 +231,35 @@ class Camera360Bindings {
           double,
           double,
           double)>();
+
+  /// Read the live progress of the in-flight `stitch` or
+  /// `stitch_with_features` call. Polled from the Dart main isolate on
+  /// a Timer while the worker isolate is blocked inside the synchronous
+  /// stitch FFI.
+  ///
+  /// out_percent  Overall progress 0..100. Set to 0 when no stitch is
+  /// running and to 100 when the most recent stitch
+  /// finished (success OR failure).
+  /// out_stage    Numeric stage id (see `progress::Stage` in
+  /// ProgressTracker.hpp). The Dart side maps this to a
+  /// human-readable label.
+  ///
+  /// Safe to call from any thread; both outputs are loaded from atomic
+  /// counters. Either pointer may be NULL.
+  void stitch_get_progress(
+    ffi.Pointer<ffi.Int> out_percent,
+    ffi.Pointer<ffi.Int> out_stage,
+  ) {
+    return _stitch_get_progress(
+      out_percent,
+      out_stage,
+    );
+  }
+
+  late final _stitch_get_progressPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<ffi.Int>,
+              ffi.Pointer<ffi.Int>)>>('stitch_get_progress');
+  late final _stitch_get_progress = _stitch_get_progressPtr
+      .asFunction<void Function(ffi.Pointer<ffi.Int>, ffi.Pointer<ffi.Int>)>();
 }

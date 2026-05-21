@@ -5,6 +5,7 @@ import 'package:camera_360/layouts/camera_selector.dart';
 import 'package:camera_360/layouts/full_screen_camera_preview.dart';
 import 'package:camera_360/layouts/helper_text.dart';
 import 'package:camera_360/layouts/orientation_helpers.dart';
+import 'package:camera_360/layouts/stitching_progress_overlay.dart';
 import 'package:camera_360/utilities/onnx_feature_pipeline.dart';
 import 'package:camera_360/utilities/stitcher.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +13,7 @@ import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:camera/camera.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:gallery_saver_plus/gallery_saver.dart';
 import 'package:dchs_motion_sensors/dchs_motion_sensors.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:async';
@@ -30,6 +32,18 @@ typedef CaptureStartButtonBuilder = Widget Function(
   bool enabled,
 );
 
+/// Builds the overlay shown while the panorama is being stitched.
+///
+/// [stage] is a human-readable English label that progresses through
+/// "Preprocessing", "Matching features", "Bundle adjustment", "Warping",
+/// "Blending", "Finalising", etc. [percent] is an overall 0..100 figure
+/// across the entire stitch pipeline (matching + composition).
+typedef StitchingProgressBuilder = Widget Function(
+  BuildContext context,
+  String stage,
+  int percent,
+);
+
 class Camera360 extends StatefulWidget {
   /// Callback called when capture has ended and panorama is prepared
   final void Function(Map<String, dynamic>) onCaptureEnded;
@@ -39,6 +53,12 @@ class Camera360 extends StatefulWidget {
 
   /// Callback called when progress has changed
   final void Function(int)? onProgressChanged;
+
+  /// Optional builder for the overlay shown while the panorama is being
+  /// stitched. When omitted, [StitchingProgressOverlay] is shown (stage
+  /// label, progress bar, and percentage). When the stitcher hasn't
+  /// started yet the overlay falls back to the plain [loadingText].
+  final StitchingProgressBuilder? stitchingProgressBuilder;
 
   /// Number of photos captured in a full 360° rotation. Defaults to 16.
   final int? photoCount;
@@ -112,6 +132,10 @@ class Camera360 extends StatefulWidget {
   /// Match the closing pair (last ↔ first) for a full 360° loop.
   final bool stitchLoop360;
 
+  /// Close the wrap seam (BA boost, yaw closure, ring canvas, period crop).
+  /// Only applies when [stitchLoop360] is true. Defaults to enabled.
+  final bool stitchLoopClosure;
+
   /// How the blended canvas is cropped before optional fill.
   final StitchCropMode stitchCrop;
 
@@ -139,11 +163,16 @@ class Camera360 extends StatefulWidget {
   /// Fade curve steepness toward flat colour (1.0 = linear).
   final double stitchFillFadePower;
 
+  /// When true, each captured frame is copied to the device photo gallery
+  /// before cache cleanup so frames survive [deleteCache]. Defaults to false.
+  final bool debug;
+
   const Camera360({
     Key? key,
     required this.onCaptureEnded,
     this.onCameraChanged,
     this.onProgressChanged,
+    this.stitchingProgressBuilder,
     this.photoCount,
     this.captureImageWidth,
     this.captureImageQuality,
@@ -160,6 +189,7 @@ class Camera360 extends StatefulWidget {
     this.stitchModel = StitchFeatureModel.sift,
     this.onnxModelAssetKey,
     this.stitchLoop360 = true,
+    this.stitchLoopClosure = true,
     this.stitchCrop = StitchCropMode.inner,
     this.stitchFallback = true,
     this.stitchFill = true,
@@ -169,6 +199,7 @@ class Camera360 extends StatefulWidget {
     this.stitchFillFade = 50,
     this.stitchFillBlurRatio = 0.01,
     this.stitchFillFadePower = 5.0,
+    this.debug = false,
   }) : super(key: key);
 
   @override
@@ -262,6 +293,16 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
   late XFile finalStitchedImage;
   bool imageSaved = false;
   bool isPanoramaBeingStitched = false;
+
+  // Stitch-phase progress mirrored from the native ProgressTracker and the
+  // Dart-side ONNX pipeline. `_stitchStage` is empty until the first
+  // callback fires; the loading overlay falls back to plain `loadingText`
+  // while that's the case.
+  String _stitchStage = '';
+  int _stitchPercent = 0;
+
+  /// Bumped at each stitch so [StitchingProgressOverlay] resets its bar once.
+  int _stitchRunId = 0;
 
   // Add this field at the top of the class with other variables
   Timer? _waitingTimer;
@@ -565,6 +606,10 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
   /// background isolates without extra plumbing). The native stitcher then
   /// composes the panorama from the pre-computed matches.
   Future<XFile> _stitchImages(List<XFile> images) async {
+    _stitchRunId++;
+    _stitchStage = 'Preparing';
+    _stitchPercent = 0;
+    if (mounted) setState(() {});
     Uint8List? featuresBlob;
     if (widget.stitchModel == StitchFeatureModel.onnx) {
       final assetKey = widget.onnxModelAssetKey;
@@ -574,10 +619,8 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
           'onnxModelAssetKey was not provided.',
         );
       }
-      // Ensure the model is on disk (may already be cached from initState).
       final modelPath =
           _resolvedOnnxModelPath ?? await _ensureOnnxModelOnDisk(assetKey);
-      // Cache for subsequent stitches in the same session.
       _resolvedOnnxModelPath ??= modelPath;
 
       debugPrint(
@@ -589,6 +632,7 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
         featuresBlob = await pipeline.compute(
           images,
           loop360: widget.stitchLoop360,
+          onProgress: _emitStitchProgress,
         );
         debugPrint(
           'Camera360: ONNX features ready (${featuresBlob.length} bytes), '
@@ -607,6 +651,7 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
       images,
       model: widget.stitchModel,
       loop360: widget.stitchLoop360,
+      loopClosure: widget.stitchLoopClosure,
       crop: widget.stitchCrop,
       fallback: widget.stitchFallback,
       fill: widget.stitchFill,
@@ -618,7 +663,53 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
       fillFadePower: widget.stitchFillFadePower,
       fillVerticalCameraDeg: deviceVerticalCorrectDeg,
       featuresBlob: featuresBlob,
+      onStitchProgress: _emitStitchProgress,
     );
+  }
+
+  Widget _buildStitchOverlay(BuildContext context) {
+    if (!isPanoramaBeingStitched) {
+      return Center(
+        child: Text(
+          loadingText,
+          style: const TextStyle(color: Colors.white),
+        ),
+      );
+    }
+
+    final stage = _stitchStage.isEmpty ? loadingText : _stitchStage;
+    if (widget.stitchingProgressBuilder != null) {
+      return widget.stitchingProgressBuilder!(
+        context,
+        stage,
+        _stitchPercent,
+      );
+    }
+
+    return StitchingProgressOverlay(
+      key: ValueKey(_stitchRunId),
+      stage: stage,
+      percent: _stitchPercent,
+      fallbackLabel: loadingText,
+    );
+  }
+
+  /// Updates stitch overlay state from the ONNX pipeline or native poller.
+  void _emitStitchProgress(String stage, int percent) {
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    // Never move the displayed bar backward between stages.
+    if (percent < _stitchPercent) percent = _stitchPercent;
+    if (stage == _stitchStage && percent == _stitchPercent) return;
+    if (mounted) {
+      setState(() {
+        _stitchStage = stage;
+        _stitchPercent = percent;
+      });
+    } else {
+      _stitchStage = stage;
+      _stitchPercent = percent;
+    }
   }
 
   // Resize captured image for faster stitching
@@ -663,6 +754,20 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
     return XFile(compressedImage.path);
   }
 
+  /// Copies [imagePath] to the photo gallery when [Camera360.debug] is enabled.
+  Future<void> _saveCapturedImageToGalleryIfDebug(String imagePath) async {
+    if (!widget.debug) {
+      return;
+    }
+    try {
+      final saved = await GallerySaver.saveImage(imagePath);
+      debugPrint(
+          "'Panorama360': Debug gallery save ${saved == true ? 'ok' : 'failed'}: $imagePath");
+    } catch (e) {
+      debugPrint("'Panorama360': Debug gallery save error: $e");
+    }
+  }
+
   // Take picture
   Future<XFile?> _takePicture() async {
     try {
@@ -670,6 +775,7 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
       XFile image = await controller.takePicture().then((XFile? file) {
         return resizeImage(File(file!.path));
       });
+      await _saveCapturedImageToGalleryIfDebug(image.path);
       capturedImages.add(image);
       nrPhotosTaken++;
       prepareForNextImageCapture();
@@ -1039,12 +1145,7 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
                         ),
                       ],
                     )
-                  : Center(
-                      child: Text(
-                        loadingText,
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                    ),
+                  : _buildStitchOverlay(context),
             );
           }
 
@@ -1193,12 +1294,7 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
                       ),
                     ],
                   )
-                : Center(
-                    child: Text(
-                      loadingText,
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ),
+                : _buildStitchOverlay(context),
           );
         },
       );

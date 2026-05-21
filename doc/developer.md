@@ -127,6 +127,7 @@ The harness prints stage timings from the native stitcher (match, compose, crop,
 | `--model NAME`        | OpenCV detector: `sift`, `orb`, `akaze`, `brisk`                                           |
 | `--crop MODE`         | `none`, `bbox`, `inner` (was `fill` — that is now the separate `--fill` flag)              |
 | `--no-loop`           | Do not match the closing pair (last ↔ first)                                               |
+| `--no-loop-closure`   | Match the closing pair but skip wrap-seam closure (ring canvas, yaw closure, etc.)         |
 | `--no-fallback`       | Disable homography fallback for failed adjacent pairs                                      |
 | `--fill`              | Run the per-column blur → flat top/bottom fill (default). Works with every crop mode.      |
 | `--no-fill`           | Skip the fill step entirely                                                                |

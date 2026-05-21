@@ -37,7 +37,8 @@ struct Args {
     std::string input      = "../test_input/bathroom";
     std::string model      = "sift";
     std::string out        = "panorama_out.jpg";
-    bool        loop_360   = true;
+    bool        loop_360      = true;
+    bool        loop_closure  = true;
     std::string crop       = "inner";
     bool        fallback   = true;
     bool        fill       = false;
@@ -65,6 +66,7 @@ void printUsage(const char* prog) {
         << "  --model  NAME     sift | orb | akaze | brisk  (default: sift)\n"
         << "  --crop   MODE     none | bbox | inner          (default: inner)\n"
         << "  --no-loop         disable closing pair for 360\n"
+        << "  --no-loop-closure disable wrap-seam closure (BA boost, ring canvas)\n"
         << "  --no-fallback     disable homography fallback for failed pairs\n"
         << "  --fill            enable post-crop blur->flat top/bottom fill (default)\n"
         << "  --no-fill         disable the post-crop fill\n"
@@ -104,7 +106,8 @@ bool parseArgs(int argc, char** argv, Args& a) {
             }
             a.crop = tmp;
         }
-        else if (s == "--no-loop")         { a.loop_360  = false; }
+        else if (s == "--no-loop")         { a.loop_360     = false; }
+        else if (s == "--no-loop-closure") { a.loop_closure = false; }
         else if (s == "--no-fallback")     { a.fallback  = false; }
         else if (s == "--fill")            { a.fill      = true;  }
         else if (s == "--no-fill")         { a.fill      = false; }
@@ -210,6 +213,7 @@ int main(int argc, char** argv) {
               << "Model   : " << args.model  << "\n"
               << "Crop    : " << args.crop   << "\n"
               << "Loop360 : " << (args.loop_360 ? "yes" : "no") << "\n"
+              << "Closure : " << (args.loop_closure ? "yes" : "no") << "\n"
               << "Fallback: " << (args.fallback  ? "yes" : "no") << "\n"
               << "Fill    : " << (args.fill     ? "yes" : "no") << "\n"
               << "V-Cam   : " << args.fill_vertical_camera_deg << " deg\n"
@@ -223,6 +227,7 @@ int main(int argc, char** argv) {
         args.model.c_str(),
         args.out.c_str(),
         args.loop_360,
+        args.loop_closure,
         args.crop.c_str(),
         args.fallback,
         args.fill,

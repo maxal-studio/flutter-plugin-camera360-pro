@@ -37,6 +37,7 @@ set(FLUTTER_UMBRELLA
 	${umbrella}/Stitcher/OpenCvMatcher.cpp
 	${umbrella}/Stitcher/MatchFallback.cpp
 	${umbrella}/Stitcher/ExternalFeatures.cpp
+	${umbrella}/Stitcher/ProgressTracker.cpp
 )
 
 ###Build a shared library with our umbrella clases and opencv

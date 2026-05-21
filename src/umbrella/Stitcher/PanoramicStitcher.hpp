@@ -31,11 +31,22 @@ struct StitcherOptions {
     bool   wave_correct = true;
 
     // When true, the closing pair (last ↔ first image) was matched during
-    // feature extraction. The stitcher uses this to know whether to repair
-    // any thin strip of background-coloured columns left at the horizontal
-    // wrap seam after blending — a post-blend step that eliminates the
-    // vertical black line some 360° viewers render at the left/right boundary.
+    // feature extraction so a full 360° sweep can be composed. Set to false
+    // for a partial arc (< 360°) that should not wrap.
     bool loop_360 = true;
+
+    // When true (and loop_360 is also true) the stitcher runs a lightweight
+    // post-blend pass that hides the wrap seam by:
+    //   1. Sampling a strip of columns at each canvas edge (mask-valid rows
+    //      only) and computing the per-channel mean colour difference.
+    //   2. Tapering ±half of that delta inward from each edge so the two
+    //      sides meet in the middle tonally; the interior is untouched.
+    //   3. Alpha-blending the outermost few columns between the two edges
+    //      to hide any sub-pixel chroma mismatch.
+    // Cheap (a handful of millisecond on a 3k-wide pano) and assumes the
+    // geometry already closes without bundle-adjustment tricks — disable
+    // it to inspect the raw blender output.
+    bool loop_closure = true;
 
     // Resolution at which exposure compensation and seam finding run. The
     // expensive DP seam finder is roughly O(W*H) per overlap, so running it on

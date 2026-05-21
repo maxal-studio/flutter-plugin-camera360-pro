@@ -37,6 +37,8 @@ set(FLUTTER_UMBRELLA
   ${umbrella}/Stitcher/MatchFallback.hpp
   ${umbrella}/Stitcher/ExternalFeatures.cpp
   ${umbrella}/Stitcher/ExternalFeatures.hpp
+  ${umbrella}/Stitcher/ProgressTracker.cpp
+  ${umbrella}/Stitcher/ProgressTracker.hpp
 )
 
 set(FLUTTER_UMBRELLA_PUBLIC

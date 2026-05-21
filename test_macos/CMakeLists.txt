@@ -26,6 +26,7 @@ set(UMBRELLA_SOURCES
     ${UMBRELLA}/OpenCvMatcher.cpp
     ${UMBRELLA}/MatchFallback.cpp
     ${UMBRELLA}/ExternalFeatures.cpp
+    ${UMBRELLA}/ProgressTracker.cpp
 )
 
 # ── Executable ────────────────────────────────────────────────────────────────

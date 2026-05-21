@@ -68,9 +68,15 @@ class OnnxFeaturePipeline {
   ///
   /// `images` order is preserved. When [loop360] is true the closing pair
   /// (last, 0) is also processed.
+  ///
+  /// [onProgress] is called from the main isolate with a stage label and
+  /// an overall percent in the 0..65 range — the upstream
+  /// [Stitcher.stitchImages] poller continues into 65..100 once the
+  /// native compose FFI starts.
   Future<Uint8List> compute(
     List<XFile> images, {
     required bool loop360,
+    void Function(String stage, int percent)? onProgress,
   }) async {
     if (_session == null) {
       throw StateError(
@@ -90,11 +96,23 @@ class OnnxFeaturePipeline {
       'inputSize=${modelInputSize}x$modelInputSize',
     );
 
+    // ONNX progress budget within the global 0..100 (feature work is slow):
+    //   Preprocessing     1..5 %
+    //   Matching features 5..65 %
+    // The downstream stitch poller picks up at 65 % once the native FFI runs.
+    // Avoid emitting 0 % here — it follows "Preparing" and makes the bar look
+    // like it reset when the stage label changes.
+
     // Decode + preprocess each image exactly once and reuse the tensors
     // across the two pairs each image participates in.
     final preprocessed = <_PreprocessedImage>[];
     for (int i = 0; i < n; ++i) {
       preprocessed.add(await _preprocess(images[i], index: i));
+      final preprocessPct = ((i + 1) * 5) ~/ n;
+      onProgress?.call(
+        'Preprocessing',
+        preprocessPct > 0 ? preprocessPct : 1,
+      );
     }
 
     // Per-image keypoint arrays — interleaved (x0, y0, x1, y1, ...) so they
@@ -134,6 +152,10 @@ class OnnxFeaturePipeline {
         'kptsA=${inferred.kptsA.length ~/ 2}, '
         'kptsB=${inferred.kptsB.length ~/ 2}, '
         'matches=${inferred.matches.length ~/ 2}',
+      );
+      onProgress?.call(
+        'Matching features',
+        5 + (((p + 1) * 60) ~/ pairCount),
       );
     }
 

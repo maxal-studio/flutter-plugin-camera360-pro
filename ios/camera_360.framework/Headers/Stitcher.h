@@ -21,6 +21,9 @@ extern "C"
     //   out              Output panorama file path (.jpg / .png).
     //   loop_360         When true, also match the closing pair (last <-> first)
     //                    so a full 360 panorama can be composed.
+    //   loop_closure     When true (and loop_360 is true), run the wrap-seam
+    //                    closure pipeline (BA boost, yaw closure, ring-extended
+    //                    canvas, period crop, edge repair). Defaults to true.
     //   crop             "none" | "bbox" | "inner".
     //                    Controls how the painted area is cropped from the
     //                    blended canvas. Independent of `fill`.
@@ -52,6 +55,7 @@ extern "C"
                 const char *model,
                 const char *out,
                 bool        loop_360,
+                bool        loop_closure,
                 const char *crop,
                 bool        fallback,
                 bool        fill,
@@ -75,13 +79,14 @@ extern "C"
     // `image_paths`.
     //
     // All other parameters behave identically to `stitch` (image paths,
-    // output path, crop / fill / fallback / loop_360, etc.). No `model`
-    // argument is needed because matching is already done.
+    // output path, crop / fill / fallback / loop_360 / loop_closure, etc.).
+    // No `model` argument is needed because matching is already done.
     bool stitch_with_features(const char    *image_paths,
                               const uint8_t *features_blob,
                               size_t         features_blob_len,
                               const char    *out,
                               bool           loop_360,
+                              bool           loop_closure,
                               const char    *crop,
                               bool           fallback,
                               bool           fill,
@@ -92,6 +97,22 @@ extern "C"
                               double         fill_blur_ratio,
                               double         fill_fade_power,
                               double         fill_vertical_camera_deg);
+
+    // Read the live progress of the in-flight `stitch` or
+    // `stitch_with_features` call. Polled from the Dart main isolate on
+    // a Timer while the worker isolate is blocked inside the synchronous
+    // stitch FFI.
+    //
+    //   out_percent  Overall progress 0..100. Set to 0 when no stitch is
+    //                running and to 100 when the most recent stitch
+    //                finished (success OR failure).
+    //   out_stage    Numeric stage id (see `progress::Stage` in
+    //                ProgressTracker.hpp). The Dart side maps this to a
+    //                human-readable label.
+    //
+    // Safe to call from any thread; both outputs are loaded from atomic
+    // counters. Either pointer may be NULL.
+    void stitch_get_progress(int *out_percent, int *out_stage);
 
 #ifdef __cplusplus
 } // closing brace for extern "C"
