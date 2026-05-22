@@ -1,10 +1,16 @@
 export 'package:camera_360/utilities/stitcher.dart'
     show StitchCropMode, StitchFeatureModel, Stitcher;
+export 'package:camera_360/layouts/orientation_info.dart'
+    show DebugInfoAlignment, DebugInfoPosition;
+export 'package:camera_360/layouts/capture_control_buttons.dart'
+    show DefaultCaptureResetButton, DefaultCaptureStartButton, hideCaptureResetButton;
 
+import 'package:camera_360/layouts/capture_control_buttons.dart';
 import 'package:camera_360/layouts/camera_selector.dart';
 import 'package:camera_360/layouts/full_screen_camera_preview.dart';
 import 'package:camera_360/layouts/helper_text.dart';
 import 'package:camera_360/layouts/orientation_helpers.dart';
+import 'package:camera_360/layouts/orientation_info.dart';
 import 'package:camera_360/layouts/stitching_progress_overlay.dart';
 import 'package:camera_360/utilities/onnx_feature_pipeline.dart';
 import 'package:camera_360/utilities/stitcher.dart';
@@ -30,6 +36,14 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 typedef CaptureStartButtonBuilder = Widget Function(
   VoidCallback onStart,
   bool enabled,
+);
+
+/// Builds the reset control shown at the bottom during capture.
+///
+/// When omitted, [DefaultCaptureResetButton] is used. Pass
+/// [hideCaptureResetButton] to hide the control entirely.
+typedef CaptureResetButtonBuilder = Widget Function(
+  VoidCallback onReset,
 );
 
 /// Builds the overlay shown while the panorama is being stitched.
@@ -102,8 +116,13 @@ class Camera360 extends StatefulWidget {
   final Widget? cameraNotReadyContent;
 
   /// Builder for the start-capture button placed above the camera selector.
-  /// When omitted, a default "Start capture" button is shown.
+  /// When omitted, [DefaultCaptureStartButton] is shown.
   final CaptureStartButtonBuilder? captureStartButtonBuilder;
+
+  /// Builder for the reset control shown during capture.
+  /// When omitted, [DefaultCaptureResetButton] is shown.
+  /// Pass [hideCaptureResetButton] to hide the control entirely.
+  final CaptureResetButtonBuilder? captureResetButtonBuilder;
 
   // ── Native stitcher options (see `Stitcher.stitch` / Stitcher.h) ───────────
 
@@ -163,9 +182,16 @@ class Camera360 extends StatefulWidget {
   /// Fade curve steepness toward flat colour (1.0 = linear).
   final double stitchFillFadePower;
 
+  /// When true, shows a live orientation readout overlay during capture.
+  /// See [debugInfoPosition] for placement. Defaults to false.
+  final bool debug;
+
+  /// Corner and inset for the orientation debug overlay when [debug] is true.
+  final DebugInfoPosition debugInfoPosition;
+
   /// When true, each captured frame is copied to the device photo gallery
   /// before cache cleanup so frames survive [deleteCache]. Defaults to false.
-  final bool debug;
+  final bool saveCapturedImages;
 
   const Camera360({
     Key? key,
@@ -185,6 +211,7 @@ class Camera360 extends StatefulWidget {
     this.cameraSelectorInfoPopUpContent,
     this.cameraNotReadyContent,
     this.captureStartButtonBuilder,
+    this.captureResetButtonBuilder,
     this.captureVerticalDeg = 90,
     this.stitchModel = StitchFeatureModel.sift,
     this.onnxModelAssetKey,
@@ -200,6 +227,8 @@ class Camera360 extends StatefulWidget {
     this.stitchFillBlurRatio = 0.01,
     this.stitchFillFadePower = 5.0,
     this.debug = false,
+    this.debugInfoPosition = DebugInfoPosition.topLeft,
+    this.saveCapturedImages = false,
   }) : super(key: key);
 
   @override
@@ -211,8 +240,7 @@ class Camera360 extends StatefulWidget {
 class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
   // A list with all available camera
   late List<CameraDescription> cameras;
-  // Camera controller
-  late CameraController controller;
+  CameraController? _controller;
   // _isReady is true when device is ready to take another image
   bool _isReady = false;
   double posX = 180, posY = 350;
@@ -357,6 +385,33 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
     await deletePanoramaImages();
   }
 
+  /// Compass heading 0..360° from a yaw/pitch/roll triple (clockwise).
+  static double _compassHeadingDegFromEuler(
+      double yaw, double pitch, double roll) {
+    final double cosA = cos(yaw), sinA = sin(yaw);
+    final double sinB = sin(pitch);
+    final double cosG = cos(roll), sinG = sin(roll);
+    final double camEast = -(cosA * sinG + sinA * sinB * cosG);
+    final double camNorth = -(sinA * sinG - cosA * sinB * cosG);
+    double headingDeg = degrees(atan2(camEast, camNorth));
+    if (headingDeg < 0) headingDeg += 360;
+    return headingDeg;
+  }
+
+  /// Gimbal-lock-safe camera-axis tilt (degrees) from a yaw/pitch/roll triple.
+  /// Matches the [deviceRotationDeg] computation in [build].
+  static double _cameraTiltDegFromEuler(double yaw, double pitch, double roll) {
+    final double cosB = cos(pitch), sinB = sin(pitch);
+    final double sinG = sin(roll);
+    return degrees(atan2(sinG * cosB, sinB));
+  }
+
+  /// Camera elevation on the 0..180 scale (90 = horizon). Matches [deviceVerticalDeg].
+  static double _cameraVerticalDegFromEuler(double pitch, double roll) {
+    final double camUp = -(cos(pitch) * cos(roll));
+    return 90 + degrees(asin(camUp.clamp(-1.0, 1.0)));
+  }
+
   void _startCapture() {
     if (_captureEnabled) {
       return;
@@ -364,6 +419,7 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
     _sensorHasFirstReading = false;
     _resetHeadingTracking();
     _setupSensors();
+    if (!mounted) return;
     setState(() {
       _captureEnabled = true;
     });
@@ -416,12 +472,22 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
       return widget.captureStartButtonBuilder!(_startCapture, true);
     }
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: ElevatedButton(
-        onPressed: _startCapture,
-        child: const Text('Start capture'),
-      ),
+    return DefaultCaptureStartButton(
+      onStart: _startCapture,
+      enabled: true,
+    );
+  }
+
+  Widget _buildCaptureResetButton() {
+    final CaptureResetButtonBuilder? builder = widget.captureResetButtonBuilder;
+    if (builder == hideCaptureResetButton) {
+      return const SizedBox.shrink();
+    }
+    if (builder != null) {
+      return builder(() => restartApp(reason: 'Reset button hit'));
+    }
+    return DefaultCaptureResetButton(
+      onReset: () => restartApp(reason: 'Reset button hit'),
     );
   }
 
@@ -476,10 +542,12 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
     // Stream
     _streamSubscriptions.add(motionSensors.absoluteOrientation
         .listen((AbsoluteOrientationEvent event) {
-      setState(() {
-        _absoluteOrientation.setValues(event.yaw, event.pitch, event.roll);
-        _sensorHasFirstReading = true;
-      });
+      _absoluteOrientation.setValues(event.yaw, event.pitch, event.roll);
+      _sensorHasFirstReading = true;
+      _updateCumulativeHorizontalDeg(
+        _compassHeadingDegFromEuler(event.yaw, event.pitch, event.roll),
+      );
+      if (mounted) setState(() {});
     }));
   }
 
@@ -494,6 +562,7 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
   // Setup Cameras
   Future<void> _setupCameras() async {
     cameras = await availableCameras();
+    if (!mounted) return;
     final List<CameraDescription> backOrExternal =
         cameras.where((CameraDescription description) {
       return description.lensDirection == CameraLensDirection.back ||
@@ -524,8 +593,16 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
     _initCamera(selectedCameraKey);
   }
 
+  void _releaseController() {
+    final CameraController? existing = _controller;
+    _controller = null;
+    _isReady = false;
+    existing?.dispose();
+  }
+
   // Initialize camera
   Future<void> _initCamera(int cameraKey) async {
+    if (!mounted) return;
     // Check if selected camera exists
     if (cameras.asMap().containsKey(cameraKey) == false) {
       // Update selectedCameraKey
@@ -533,18 +610,31 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
       cameraKey = 0;
     }
     // Change the camera
+    _releaseController();
+    if (!mounted) return;
     try {
       CameraDescription description = cameras[cameraKey];
       // Update selectedCameraKey
       selectedCameraKey = cameraKey;
       // initialize camera controllers.
-      controller = CameraController(description, ResolutionPreset.max,
-          enableAudio: false, imageFormatGroup: ImageFormatGroup.jpeg);
-      await controller.initialize();
+      final CameraController nextController = CameraController(
+        description,
+        ResolutionPreset.max,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+      _controller = nextController;
+      await nextController.initialize();
+      if (!mounted) {
+        _releaseController();
+        return;
+      }
       setState(() {
         _isReady = true;
       });
     } catch (_) {
+      _releaseController();
+      if (!mounted) return;
       setState(() {
         _isReady = false;
       });
@@ -754,28 +844,33 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
     return XFile(compressedImage.path);
   }
 
-  /// Copies [imagePath] to the photo gallery when [Camera360.debug] is enabled.
-  Future<void> _saveCapturedImageToGalleryIfDebug(String imagePath) async {
-    if (!widget.debug) {
+  /// Copies [imagePath] to the photo gallery when [Camera360.saveCapturedImages]
+  /// is enabled.
+  Future<void> _saveCapturedImageToGalleryIfEnabled(String imagePath) async {
+    if (!widget.saveCapturedImages) {
       return;
     }
     try {
       final saved = await GallerySaver.saveImage(imagePath);
       debugPrint(
-          "'Panorama360': Debug gallery save ${saved == true ? 'ok' : 'failed'}: $imagePath");
+          "'Panorama360': Gallery save ${saved == true ? 'ok' : 'failed'}: $imagePath");
     } catch (e) {
-      debugPrint("'Panorama360': Debug gallery save error: $e");
+      debugPrint("'Panorama360': Gallery save error: $e");
     }
   }
 
   // Take picture
   Future<XFile?> _takePicture() async {
+    final CameraController? activeController = _controller;
+    if (activeController == null || !activeController.value.isInitialized) {
+      return null;
+    }
     try {
       takingPicture = true;
-      XFile image = await controller.takePicture().then((XFile? file) {
+      XFile image = await activeController.takePicture().then((XFile? file) {
         return resizeImage(File(file!.path));
       });
-      await _saveCapturedImageToGalleryIfDebug(image.path);
+      await _saveCapturedImageToGalleryIfEnabled(image.path);
       capturedImages.add(image);
       nrPhotosTaken++;
       prepareForNextImageCapture();
@@ -993,21 +1088,20 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
     _disableCapture();
     // Disable screen always on
     WakelockPlus.disable();
-    controller.dispose();
+    _releaseController();
     // Sensors are disabled using didChangeAppLifecycleState but we need
     // to disable them again when disposed in case user navigates into another
     // view
     _disableSensors();
 
-    // Restart app
-    restartApp(reason: "App disposed");
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_isReady) {
+    final CameraController? activeController = _controller;
+    if (!_isReady || activeController == null) {
       return widget.cameraNotReadyContent ??
           const Center(
             child: Padding(
@@ -1049,29 +1143,13 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
           final double euA = _absoluteOrientation.x;
           final double euB = _absoluteOrientation.y;
           final double euG = _absoluteOrientation.z;
-          final double cosA = cos(euA), sinA = sin(euA);
-          final double cosB = cos(euB), sinB = sin(euB);
-          final double cosG = cos(euG), sinG = sin(euG);
-
-          // Back-camera axis (device −Z) expressed in world ENU coordinates.
-          final double camEast = -(cosA * sinG + sinA * sinB * cosG);
-          final double camNorth = -(sinA * sinG - cosA * sinB * cosG);
-          final double camUp = -(cosB * cosG);
-
-          // Continuous compass heading, 0..360, increasing as the user
-          // rotates clockwise (matches the old yaw+roll convention).
-          double headingDeg = degrees(atan2(camEast, camNorth));
-          if (headingDeg < 0) headingDeg += 360;
-          double deviceHorizontalDeg =
-              double.parse(headingDeg.toStringAsFixed(1));
 
           // Elevation of the camera axis above the horizon, remapped to the
           // legacy "90 = horizon" scale so deviceVerticalCorrectDeg keeps the
           // same meaning. Range is [0, 180]: 0 = camera straight down,
           // 90 = horizon, 180 = camera straight up.
-          final double elevationDeg = degrees(asin(camUp.clamp(-1.0, 1.0)));
-          double deviceVerticalDeg =
-              double.parse((90 + elevationDeg).toStringAsFixed(1));
+          double deviceVerticalDeg = double.parse(
+              _cameraVerticalDegFromEuler(euB, euG).toStringAsFixed(1));
 
           // Camera-axis tilt, read off the rotation-matrix row that produces
           // pitch (R[2,0] / R[2,1]) instead of going through Euler roll.
@@ -1088,27 +1166,17 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
           // R[2,0] and R[2,1] are continuous through that singularity and
           // depend only on pitch + roll (not azimuth), so this reading is
           // both gimbal-lock-safe and heading-invariant.
-          //   R[2,0] = -sin(roll)·cos(pitch) → -sinG · cosB
-          //   R[2,1] = -sin(pitch)            →  sinB
-          //   tilt   = atan2(-R[2,0], R[2,1]) = atan2(sinG · cosB, sinB)
-          final double tiltRad = atan2(sinG * cosB, sinB);
-          double deviceRotationDeg =
-              double.parse(degrees(tiltRad).toStringAsFixed(1));
+          double deviceRotationDeg = double.parse(
+              _cameraTiltDegFromEuler(euA, euB, euG).toStringAsFixed(1));
 
-          // Accumulate the raw heading into the unwrapped cumulative angle
-          // used by the dot helpers. Only counts after a real sensor reading
-          // — the (0,0,0) default would otherwise anchor at a bogus 0°.
-          double cumulativeHorizontalDeg = _cumulativeHorizontalDeg;
-          if (_sensorHasFirstReading) {
-            cumulativeHorizontalDeg =
-                _updateCumulativeHorizontalDeg(deviceHorizontalDeg);
-          }
+          // Unwrapped heading updated once per sensor sample in [_setupSensors].
+          final double cumulativeHorizontalDeg = _cumulativeHorizontalDeg;
 
           if (_captureEnabled && !_sensorHasFirstReading) {
             return Stack(
               children: [
                 Positioned.fill(
-                  child: FullScreenCameraPreview(controller: controller),
+                  child: FullScreenCameraPreview(controller: activeController),
                 ),
               ],
             );
@@ -1122,7 +1190,7 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
                       children: [
                         Positioned.fill(
                           child:
-                              FullScreenCameraPreview(controller: controller),
+                              FullScreenCameraPreview(controller: activeController),
                         ),
                         Column(
                           mainAxisAlignment: MainAxisAlignment.end,
@@ -1233,7 +1301,7 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
                 ? Stack(
                     children: [
                       Positioned.fill(
-                        child: FullScreenCameraPreview(controller: controller),
+                        child: FullScreenCameraPreview(controller: activeController),
                       ),
                       Column(
                         mainAxisAlignment: MainAxisAlignment.end,
@@ -1251,11 +1319,7 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
                                     selectCamera(cameraKey);
                                   })
                               : Container(),
-                          // Reset
-                          ElevatedButton(
-                              onPressed: () =>
-                                  restartApp(reason: "Reset button hit"),
-                              child: const Text("reset")),
+                          _buildCaptureResetButton(),
                         ],
                       ),
                       // Helper Text for the first image
@@ -1292,6 +1356,15 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
                         timeToWaitBeforeTakingPicture:
                             timeToWaitBeforeTakingPicture,
                       ),
+                      if (widget.debug)
+                        widget.debugInfoPosition.position(
+                          OrientationInfo(
+                            horizontalDeg: cumulativeHorizontalDeg,
+                            targetHorizontalDeg: _targetCumulativeHorizontalDeg,
+                            verticalDeg: deviceVerticalDeg,
+                            tiltDeg: deviceRotationDeg,
+                          ),
+                        ),
                     ],
                   )
                 : _buildStitchOverlay(context),

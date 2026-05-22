@@ -112,6 +112,8 @@ Camera360(
 
 > `onCaptureEnded` returns an `XFile` on success, or `null` if stitching failed.
 
+`Camera360` reads its constructor options once at init. To change capture or stitch settings, give the widget a new [Key] (e.g. `ValueKey`) so Flutter disposes the old instance and mounts a fresh one. The example app does this for every option change.
+
 ## Capture options
 
 | Parameter             | Type      | Default                         | Description                                                        |
@@ -124,6 +126,48 @@ Camera360(
 | `helperText`          | `String?` | `'Point the camera at the dot'` | Instruction text during capture                                    |
 | `tiltLeftText`        | `String?` | `'Tilt left'`                   | Text shown when the device needs tilting left                      |
 | `tiltRightText`       | `String?` | `'Tilt right'`                  | Text shown when the device needs tilting right                     |
+| `debug`               | `bool`    | `false`                         | Show live orientation readouts (horizontal, target, vertical, tilt) during capture |
+| `debugInfoPosition`   | `DebugInfoPosition` | `DebugInfoPosition.topLeft` | Corner and inset for the debug overlay (see below)                 |
+| `saveCapturedImages`  | `bool`    | `false`                         | Copy each captured frame to the device photo gallery before cache cleanup |
+| `captureStartButtonBuilder` | `CaptureStartButtonBuilder?` | `null` (built-in shutter button) | Custom start-capture control shown before capture begins |
+| `captureResetButtonBuilder` | `CaptureResetButtonBuilder?` | `null` (built-in dark Reset) | Custom reset control during capture; pass [hideCaptureResetButton] to hide |
+
+### Capture control buttons
+
+Before capture, the default start control is a red shutter dot with a white ring on a dark translucent backing ([DefaultCaptureStartButton]). During capture, the default reset control is a dark pill-shaped **Reset** button ([DefaultCaptureResetButton]).
+
+```dart
+Camera360(
+  // Custom start shutter
+  captureStartButtonBuilder: (onStart, enabled) => MyStartButton(onPressed: onStart),
+  // Hide reset entirely
+  captureResetButtonBuilder: hideCaptureResetButton,
+  // Custom reset
+  captureResetButtonBuilder: (onReset) => MyResetButton(onPressed: onReset),
+)
+```
+
+### Debug orientation overlay
+
+When `debug` is true, a semi-transparent panel shows cumulative horizontal heading, target horizontal heading, vertical angle, and camera-axis tilt while capture is active. Toggle it independently of `saveCapturedImages`.
+
+Placement is controlled with `debugInfoPosition`:
+
+```dart
+Camera360(
+  debug: true,
+  // Presets: topLeft, topRight, bottomLeft, bottomRight
+  debugInfoPosition: DebugInfoPosition.bottomRight,
+  // Or custom corner + inset:
+  debugInfoPosition: DebugInfoPosition(
+    alignment: DebugInfoAlignment.topRight,
+    padding: EdgeInsets.only(top: 16, right: 12),
+  ),
+  // ...
+)
+```
+
+When `saveCapturedImages` is true, each frame is saved to the photo library via `gallery_saver_plus` before the plugin deletes its cache after stitching. Requires photo-library permission (see Installation).
 
 ## Stitching options
 
@@ -244,7 +288,7 @@ Stitching runs in a background isolate so the UI stays responsive. Progress is p
 
 ## Example app
 
-The `example/` app includes **Capture** and **Stitch** menus to change capture and stitching options before a run. After capture, the built-in stitch progress overlay shows stage and percent while the panorama is composed.
+The `example/` app includes **Capture** and **Stitch** menus. Changing any option assigns a new `ValueKey` to `Camera360`, reinitializing the widget with the updated configuration. The Capture menu exposes **Show orientation info** (`debug`), **Info position** (`debugInfoPosition`), and **Save captures to gallery** (`saveCapturedImages`).
 
 ```bash
 cd example && flutter run
