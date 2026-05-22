@@ -12,6 +12,74 @@
 namespace camera360 {
 namespace detail {
 
+namespace {
+
+// Compute the fractional source-pano-row that each output canvas row should
+// sample from.
+//
+// `cyl_remap = true`:
+//   Output row R corresponds to equirect elevation
+//     φ(R) = (H_target/2 − 0.5 − R) · π / H_target           [radians]
+//   In the cylindrical strip the same elevation lives at pixel
+//     v(φ) = −f · tan(φ)
+//   (OpenCV image-y-down convention: v > 0 is below the horizon, v < 0 above.)
+//   The strip's pano row 0 is at cyl-y `cyl_v_top_pano`, so the source row is
+//     src(R) = v(φ(R)) − cyl_v_top_pano
+//
+// `cyl_remap = false` (legacy fallback when the stitcher couldn't supply
+// the cylindrical focal length):
+//   Output row R is placed 1:1 from the strip, with the strip's geometric
+//   centre parked on `cam_axis_row` derived from `vertical_camera_deg`. This
+//   matches the pre-remap behaviour byte-for-byte at deg = 90 + horizon
+//   captures, and is only approximately correct otherwise.
+std::vector<double> buildSrcRowMap(int W, int H, int H_target,
+                                   double vertical_camera_deg,
+                                   double cyl_focal,
+                                   double cyl_v_top_pano,
+                                   bool   cyl_remap)
+{
+    std::vector<double> src(H_target);
+    if (cyl_remap) {
+        for (int R = 0; R < H_target; ++R) {
+            const double phi = (H_target / 2.0 - 0.5 - R) * CV_PI
+                             / static_cast<double>(H_target);
+            const double v   = -cyl_focal * std::tan(phi);
+            src[R] = v - cyl_v_top_pano;
+        }
+    } else {
+        const double elev_cam = std::max(-90.0,
+            std::min(90.0, vertical_camera_deg - 90.0));
+        const double pix_per_deg = static_cast<double>(H_target) / 180.0;
+        const double cam_axis_row = H_target / 2.0 - elev_cam * pix_per_deg;
+        const double strip_top_f  = cam_axis_row - H / 2.0;
+        for (int R = 0; R < H_target; ++R) {
+            src[R] = R - strip_top_f;
+        }
+    }
+    (void)W;
+    return src;
+}
+
+// Bilinear in row: sample the row of `pano` at fractional position `r_f`,
+// clamped to [r_lo, r_hi], for column x.
+inline cv::Vec3f sampleRowBilinear(const cv::Mat& pano, int x,
+                                   double r_f, int r_lo, int r_hi)
+{
+    if (r_f < r_lo) r_f = r_lo;
+    if (r_f > r_hi) r_f = r_hi;
+    const int r0 = std::min(static_cast<int>(std::floor(r_f)), r_hi);
+    const int r1 = std::min(r0 + 1, r_hi);
+    const float a = static_cast<float>(r_f - r0);
+    const cv::Vec3b& p0 = pano.at<cv::Vec3b>(r0, x);
+    const cv::Vec3b& p1 = pano.at<cv::Vec3b>(r1, x);
+    return cv::Vec3f(
+        (1.0f - a) * p0[0] + a * p1[0],
+        (1.0f - a) * p0[1] + a * p1[1],
+        (1.0f - a) * p0[2] + a * p1[2]);
+}
+
+}  // namespace
+
 void fillTopBottomBlur(cv::Mat&        pano,
                        const cv::Mat&  mask_in,
                        double          target_ratio,
@@ -20,236 +88,84 @@ void fillTopBottomBlur(cv::Mat&        pano,
                        int             fade_px,
                        double          blur_ratio,
                        double          fade_power,
-                       double          vertical_camera_deg)
+                       double          vertical_camera_deg,
+                       double          cyl_focal,
+                       double          cyl_v_top_pano)
 {
     if (pano.empty()) {
         std::cerr << "Fill panorama: empty panorama, skipping\n";
         return;
     }
+    if (target_ratio <= 0.0) return;
 
     const int W = pano.cols;
-    int       H = pano.rows;   // mutable: strip may be cropped below
+    const int H = pano.rows;
+    const int H_target = static_cast<int>(std::round(W / target_ratio));
+    if (H_target <= 0) return;
 
-    // Local non-const mask view so the optional row-range slice below can
-    // re-bind without touching the caller's reference.
     cv::Mat mask = mask_in;
 
-    // ── Place the captured strip on the target equirect canvas ────────────
+    // ── Decide on remap path ──────────────────────────────────────────────
     //
-    // The fill stage no longer just splits a symmetric "pad to target_ratio"
-    // budget. Instead we treat the target_ratio canvas as a 180°-vertical
-    // equirect canvas and position the captured cylindrical strip so its
-    // vertical centre lands on the row that maps to the camera's optical
-    // axis:
-    //
-    //   H_target     = round(W / target_ratio)
-    //   elev_cam     = clamp(vertical_camera_deg − 90, −90, +90)   (degrees)
-    //   pix_per_deg  = H_target / 180
-    //   cam_axis_row = H_target/2 − elev_cam · pix_per_deg
-    //
-    // Any strip rows that overflow the canvas (camera looked far enough
-    // off-horizon to capture below-nadir or above-zenith content) are
-    // cropped on the over-extended side; the kept rows are padded on the
-    // opposite side to reach H_target. At deg=90 the formula collapses to
-    // the legacy symmetric `pad_top = pad_bot = (H_target − H)/2` split, no
-    // crop — so vertical=90 captures are byte-for-byte identical to before.
-    int pad_top = 0, pad_bot = 0;
-    int crop_top = 0, crop_bot = 0;
-    if (target_ratio > 0.0) {
-        const int H_target = static_cast<int>(std::round(W / target_ratio));
-        if (H_target > 0) {
-            const double elev_cam = std::max(
-                -90.0, std::min(90.0, vertical_camera_deg - 90.0));
-            const double pix_per_deg  = static_cast<double>(H_target) / 180.0;
-            const double horizon_row  = H_target / 2.0;
-            const double cam_axis_row = horizon_row - elev_cam * pix_per_deg;
-            const double strip_top_f  = cam_axis_row - H / 2.0;
-            const double strip_bot_f  = cam_axis_row + H / 2.0;
+    // Cylindrical → equirect remap when the stitcher supplied the focal
+    // length and the v-coordinate of the pano's row 0. Without those two
+    // numbers we fall back to the legacy "paste 1:1 with a `deg`-biased
+    // offset" placement — which is only approximately correct near the
+    // horizon and only for target_ratio = 2.0 + full 360° sweeps.
+    const bool cyl_remap = (cyl_focal > 0.0);
 
-            crop_top = std::max(0,
-                std::min(H,
-                         static_cast<int>(std::round(-strip_top_f))));
-            crop_bot = std::max(0,
-                std::min(H - crop_top,
-                         static_cast<int>(std::round(strip_bot_f - H_target))));
-            pad_top = std::max(0,
-                static_cast<int>(std::round(strip_top_f)));
+    // ── Build the source-row mapping once (depends only on R) ─────────────
+    const std::vector<double> src_row = buildSrcRowMap(
+        W, H, H_target,
+        vertical_camera_deg, cyl_focal, cyl_v_top_pano, cyl_remap);
 
-            if (crop_top > 0 || crop_bot > 0) {
-                pano = pano.rowRange(crop_top, H - crop_bot).clone();
-                if (!mask.empty() && mask.cols == W && mask.rows == H)
-                    mask = mask.rowRange(crop_top, H - crop_bot).clone();
-                H = pano.rows;
-            }
+    // src_row is monotonically increasing in R for cyl_remap (since tan is
+    // monotone and the elevation decreases with R) and trivially so for the
+    // legacy linear path. Both branches therefore share the same logic for
+    // mapping a pano-row range [t, b] back to a canvas-row range
+    // [R_first, R_last].
+    auto canvasRangeFor = [&](double t, double b, int& R_first, int& R_last) {
+        // Smallest R such that src_row[R] >= t.
+        R_first = 0;
+        while (R_first < H_target && src_row[R_first] < t) ++R_first;
+        // Largest R such that src_row[R] <= b.
+        R_last = H_target - 1;
+        while (R_last >= 0 && src_row[R_last] > b) --R_last;
+    };
 
-            const int max_pad = std::max(0, H_target - H);
-            if (pad_top > max_pad) pad_top = max_pad;
-            pad_bot = std::max(0, H_target - H - pad_top);
-        }
-    }
-
-    // ── Detect wedges from mask (per-column path trigger) ──────────────────
+    // ── Per-column top/bottom valid pano-row indices (mask wedges) ───────
     const bool has_usable_mask = !mask.empty() &&
                                  mask.cols == W && mask.rows == H &&
                                  mask.type() == CV_8UC1;
-    const bool has_wedges = has_usable_mask &&
-        cv::countNonZero(mask) < static_cast<int>(mask.total());
+    std::vector<int> top_join(W, 0);
+    std::vector<int> bot_join(W, H - 1);
+    bool any_empty = false;
 
-    if (pad_top == 0 && pad_bot == 0 && !has_wedges) return;
-
-    // ── Shared parameter sanitisation ──────────────────────────────────────
-    const int S = std::max(1, std::min(source_px, H));
-    int K = std::max(3, blur_kernel);
-    if ((K & 1) == 0) ++K;
-    const int    F  = std::max(0, fade_px);
-    const double BR = std::min(1.0, std::max(0.0, blur_ratio));
-    const double FP = std::max(1.0, fade_power);
-    const float  fp = static_cast<float>(FP);
-
-    // ──────────────────────────────────────────────────────────────────────
-    // Legacy fast path: clean horizontal edges, only pad bands needed.
-    // ──────────────────────────────────────────────────────────────────────
-    if (!has_wedges) {
-        auto sampleSide = [&](bool is_top, cv::Mat& edge_profile, cv::Mat& flat_row) {
-            cv::Mat src_rows = is_top ? pano.rowRange(0, S)
-                                      : pano.rowRange(H - S, H);
-            cv::Mat mean_row_f;
-            cv::reduce(src_rows, mean_row_f, 0, cv::REDUCE_AVG, CV_32FC3);
-            cv::GaussianBlur(mean_row_f, edge_profile,
-                             cv::Size(K, 1), 0, 0, cv::BORDER_REFLECT_101);
-            const cv::Scalar mean_bgr = cv::mean(src_rows);
-            flat_row = cv::Mat(1, W, CV_32FC3,
-                               cv::Scalar(mean_bgr[0], mean_bgr[1], mean_bgr[2]));
-        };
-
-        auto buildBand = [&](bool is_top, int band_h,
-                             const cv::Mat& edge_profile,
-                             const cv::Mat& flat_row) -> cv::Mat {
-            if (band_h <= 0) return cv::Mat();
-            const float blur_rows_f = static_cast<float>(BR) * static_cast<float>(band_h);
-            const int   blur_rows   = std::min(band_h, static_cast<int>(blur_rows_f));
-            const float fade_denom  = static_cast<float>(std::max(band_h - blur_rows - 1, 1));
-
-            cv::Mat band_f(band_h, W, CV_32FC3);
-            for (int inner_r = 0; inner_r < band_h; ++inner_r) {
-                float alpha;
-                if (inner_r < blur_rows) {
-                    alpha = 0.0f;
-                } else {
-                    float g = static_cast<float>(inner_r - blur_rows) / fade_denom;
-                    if (g > 1.0f) g = 1.0f;
-                    alpha = 1.0f - std::pow(1.0f - g, fp);
-                }
-                const int br = is_top ? (band_h - 1 - inner_r) : inner_r;
-                cv::addWeighted(edge_profile, 1.0f - alpha,
-                                flat_row,     alpha,
-                                0.0, band_f.row(br));
+    if (has_usable_mask) {
+        for (int x = 0; x < W; ++x) {
+            int t = 0;
+            while (t < H && mask.at<uchar>(t, x) == 0) ++t;
+            if (t >= H) {
+                top_join[x] = -1;
+                bot_join[x] = -1;
+                any_empty = true;
+                continue;
             }
-
-            cv::Mat band;
-            band_f.convertTo(band, CV_8UC3);
-            return band;
-        };
-
-        cv::Mat top_edge, top_flat, bot_edge, bot_flat;
-        if (pad_top > 0) sampleSide(true,  top_edge, top_flat);
-        if (pad_bot > 0) sampleSide(false, bot_edge, bot_flat);
-
-        cv::Mat top_band = buildBand(true,  pad_top, top_edge, top_flat);
-        cv::Mat bot_band = buildBand(false, pad_bot, bot_edge, bot_flat);
-
-        auto featherPano = [&](bool is_top, const cv::Mat& edge_profile) {
-            const int actual_F = std::min(F, H / 2);
-            const float denom = static_cast<float>(std::max(actual_F - 1, 1));
-            for (int r = 0; r < actual_F; ++r) {
-                const int pano_r = is_top ? r : (H - 1 - r);
-                const float t = (actual_F == 1) ? 1.0f
-                              : static_cast<float>(r) / denom;
-                cv::Mat pano_row_f;
-                pano.row(pano_r).convertTo(pano_row_f, CV_32FC3);
-                cv::Mat blended_f;
-                cv::addWeighted(edge_profile, 1.0f - t,
-                                pano_row_f,   t,
-                                0.0, blended_f);
-                cv::Mat blended_u8;
-                blended_f.convertTo(blended_u8, CV_8UC3);
-                blended_u8.copyTo(pano.row(pano_r));
-            }
-        };
-
-        if (F > 0) {
-            if (pad_top > 0) featherPano(true,  top_edge);
-            if (pad_bot > 0) featherPano(false, bot_edge);
+            int b = H - 1;
+            while (b >= 0 && mask.at<uchar>(b, x) == 0) --b;
+            top_join[x] = t;
+            bot_join[x] = b;
         }
 
-        std::vector<cv::Mat> stack;
-        stack.reserve(3);
-        if (!top_band.empty()) stack.push_back(top_band);
-        stack.push_back(pano);
-        if (!bot_band.empty()) stack.push_back(bot_band);
-
-        cv::Mat out;
-        cv::vconcat(stack, out);
-
-        std::cout << "Fill panorama: " << W << "x" << H
-                  << "  ->  " << out.cols << "x" << out.rows
-                  << "  (top_pad=" << pad_top << ", bot_pad=" << pad_bot
-                  << ", crop_top=" << crop_top << ", crop_bot=" << crop_bot
-                  << ", v_cam=" << std::fixed << std::setprecision(1)
-                  << vertical_camera_deg << "deg"
-                  << ", src=" << S << ", blur=" << K
-                  << ", blur_ratio=" << std::fixed << std::setprecision(2) << BR
-                  << ", fade=" << F
-                  << ", fade_power=" << std::fixed << std::setprecision(2) << FP
-                  << ")\n";
-
-        pano = out;
-        return;
-    }
-
-    // ──────────────────────────────────────────────────────────────────────
-    // Per-column path: panorama has black wedges along the top/bottom.
-    // The fill ramp follows the per-column real-content boundary.
-    // ──────────────────────────────────────────────────────────────────────
-
-    // ── 1. Per-column top/bottom join indices from the mask ───────────────
-    std::vector<int> top_join(W, -1);
-    std::vector<int> bot_join(W, -1);
-    for (int x = 0; x < W; ++x) {
-        int t = 0;
-        while (t < H && mask.at<uchar>(t, x) == 0) ++t;
-        if (t >= H) continue;
-        int b = H - 1;
-        while (b >= 0 && mask.at<uchar>(b, x) == 0) --b;
-        top_join[x] = t;
-        bot_join[x] = b;
-    }
-
-    // ── 1b. Cyclic-aware fill for fully-empty columns ─────────────────────
-    //
-    // The cylindrical warp + multi-band blend can leave a thin band of
-    // completely-empty columns at the 360° wrap seam (small bundle-
-    // adjustment drift means the first and last image edges don't quite
-    // meet). The legacy backfill only inherited the wedge indices from a
-    // neighbour and never touched the column's *pixel* content, so the
-    // body of the empty column stayed black after the per-column ramps
-    // (which only ever paint the top/bottom wedge rows). When a panorama
-    // viewer wraps left ↔ right, that residual black middle band shows up
-    // as a vertical black line right at the seam.
-    //
-    // We now (a) search for the nearest left and right non-empty neighbour
-    // *cyclically* — the column just left of x=0 is x=W−1, the column just
-    // right of x=W−1 is x=0 — so empty columns at the wrap boundary find
-    // the closest real column on either side, and (b) copy the chosen
-    // neighbour's pixels and mask into the empty column so every later
-    // stage sees genuine content instead of a black band.
-    bool any_empty = false;
-    for (int x = 0; x < W; ++x) {
-        if (top_join[x] < 0) { any_empty = true; break; }
-    }
-    if (any_empty) {
-        std::vector<int> nearest_left(W, -1), nearest_right(W, -1);
-        {
+        // ── Cyclic backfill for fully-empty columns ──────────────────────
+        //
+        // The cylindrical warp + multi-band blend can leave a thin band of
+        // completely-empty columns at the 360° wrap seam. Inherit pixels +
+        // mask from the nearest non-empty neighbour (cyclically — empty
+        // columns at the wrap boundary find the closest real column on
+        // either side) so the remap below has real content to sample.
+        if (any_empty) {
+            std::vector<int> nearest_left(W, -1), nearest_right(W, -1);
             int prev = -1;
             for (int i = 0; i < 2 * W; ++i) {
                 const int xc = i % W;
@@ -262,49 +178,46 @@ void fillTopBottomBlur(cv::Mat&        pano,
                 if (top_join[xc] >= 0) next = xc;
                 if (i < W) nearest_right[xc] = next;
             }
-        }
 
-        // Make the local mask handle independent before mutating it so the
-        // caller's buffer is never touched. (In the crop branch above the
-        // slice already cloned the mask, so this is a no-op there.)
-        if (mask.data == mask_in.data) mask = mask.clone();
+            if (mask.data == mask_in.data) mask = mask.clone();
 
-        for (int x = 0; x < W; ++x) {
-            if (top_join[x] >= 0) continue;
-
-            const int lx = nearest_left[x];
-            const int rx = nearest_right[x];
-
-            int sx;
-            if (lx < 0 && rx < 0) {
-                // Defensive: every column is empty. Treat the column as
-                // full canvas so the downstream code does something
-                // deterministic and we don't run past the array edges.
-                top_join[x] = 0;
-                bot_join[x] = H - 1;
-                continue;
-            } else if (lx < 0) {
-                sx = rx;
-            } else if (rx < 0) {
-                sx = lx;
-            } else {
-                const int dl = (x - lx + W) % W;
-                const int dr = (rx - x + W) % W;
-                sx = (dl <= dr) ? lx : rx;
+            for (int x = 0; x < W; ++x) {
+                if (top_join[x] >= 0) continue;
+                const int lx = nearest_left[x];
+                const int rx = nearest_right[x];
+                int sx;
+                if (lx < 0 && rx < 0) {
+                    top_join[x] = 0;
+                    bot_join[x] = H - 1;
+                    continue;
+                } else if (lx < 0) {
+                    sx = rx;
+                } else if (rx < 0) {
+                    sx = lx;
+                } else {
+                    const int dl = (x - lx + W) % W;
+                    const int dr = (rx - x + W) % W;
+                    sx = (dl <= dr) ? lx : rx;
+                }
+                top_join[x] = top_join[sx];
+                bot_join[x] = bot_join[sx];
+                pano.col(sx).copyTo(pano.col(x));
+                mask.col(sx).copyTo(mask.col(x));
             }
-
-            // Inherit the donor's wedge depth so the fade ramp at the
-            // filled column matches the donor's exactly, then copy the
-            // donor's pixel + mask data so the body of the column shows
-            // real content instead of black.
-            top_join[x] = top_join[sx];
-            bot_join[x] = bot_join[sx];
-            pano.col(sx).copyTo(pano.col(x));
-            mask.col(sx).copyTo(mask.col(x));
         }
     }
 
-    // ── 2. Build wedge-free edge strips (S × W) for top and bottom ────────
+    // ── Parameter sanitisation ────────────────────────────────────────────
+    const int    S  = std::max(1, std::min(source_px, H));
+    int          K  = std::max(3, blur_kernel);
+    if ((K & 1) == 0) ++K;
+    const int    F  = std::max(0, fade_px);
+    const double BR = std::min(1.0, std::max(0.0, blur_ratio));
+    const double FP = std::max(1.0, fade_power);
+    const float  fp = static_cast<float>(FP);
+
+    // ── Build per-column edge profiles (S rows nearest each column's
+    //     real-content boundary, mean → horizontally blurred → flat) ──
     cv::Mat top_strip(S, W, CV_8UC3);
     cv::Mat bot_strip(S, W, CV_8UC3);
     for (int x = 0; x < W; ++x) {
@@ -319,46 +232,60 @@ void fillTopBottomBlur(cv::Mat&        pano,
         }
     }
 
-    // ── 3. Per-side edge_profile + flat colour ────────────────────────────
-    auto computeProfile = [&](const cv::Mat& strip,
-                              cv::Mat& edge_profile,
-                              cv::Mat& flat_row) {
-        cv::Mat mean_row_f;
-        cv::reduce(strip, mean_row_f, 0, cv::REDUCE_AVG, CV_32FC3);
-        cv::GaussianBlur(mean_row_f, edge_profile,
-                         cv::Size(K, 1), 0, 0, cv::BORDER_REFLECT_101);
-        const cv::Scalar mean_bgr = cv::mean(strip);
-        flat_row = cv::Mat(1, W, CV_32FC3,
-                           cv::Scalar(mean_bgr[0], mean_bgr[1], mean_bgr[2]));
-    };
-    cv::Mat top_edge, top_flat, bot_edge, bot_flat;
-    computeProfile(top_strip, top_edge, top_flat);
-    computeProfile(bot_strip, bot_edge, bot_flat);
-
-    // ── 4. Allocate output float canvas and copy real content into it ─────
-    const int OUT_H = H + pad_top + pad_bot;
-    cv::Mat out_f(OUT_H, W, CV_32FC3, cv::Scalar(0, 0, 0));
+    cv::Mat top_mean_f, bot_mean_f, top_edge, bot_edge, top_flat, bot_flat;
+    cv::reduce(top_strip, top_mean_f, 0, cv::REDUCE_AVG, CV_32FC3);
+    cv::reduce(bot_strip, bot_mean_f, 0, cv::REDUCE_AVG, CV_32FC3);
+    cv::GaussianBlur(top_mean_f, top_edge, cv::Size(K, 1), 0, 0,
+                     cv::BORDER_REFLECT_101);
+    cv::GaussianBlur(bot_mean_f, bot_edge, cv::Size(K, 1), 0, 0,
+                     cv::BORDER_REFLECT_101);
     {
-        cv::Mat pano_f;
-        pano.convertTo(pano_f, CV_32FC3);
-        pano_f.copyTo(out_f.rowRange(pad_top, pad_top + H));
+        const cv::Scalar top_avg = cv::mean(top_strip);
+        const cv::Scalar bot_avg = cv::mean(bot_strip);
+        top_flat = cv::Mat(1, W, CV_32FC3,
+                           cv::Scalar(top_avg[0], top_avg[1], top_avg[2]));
+        bot_flat = cv::Mat(1, W, CV_32FC3,
+                           cv::Scalar(bot_avg[0], bot_avg[1], bot_avg[2]));
     }
 
-    // ── 5. Per-column ramps + pano-side feather ───────────────────────────
+    // ── Allocate output canvas (float-precision; collapsed to u8 below) ──
+    cv::Mat out_f(H_target, W, CV_32FC3, cv::Scalar(0, 0, 0));
+
+    // Per-column accounting so the verbose log can summarise the work done.
+    int summary_R_first = H_target;
+    int summary_R_last  = -1;
+
+    // ── Per-column: bilinear-sample the strip into the canvas, then fill ──
     for (int x = 0; x < W; ++x) {
         const int t = top_join[x];
         const int b = bot_join[x];
-        const int D_top = pad_top + t;
-        const int D_bot = pad_bot + (H - 1 - b);
+        if (t < 0 || b < 0) continue;       // should not happen after backfill
+
+        int R_first, R_last;
+        canvasRangeFor(static_cast<double>(t), static_cast<double>(b),
+                       R_first, R_last);
 
         const cv::Vec3f ep_top = top_edge.at<cv::Vec3f>(0, x);
         const cv::Vec3f fl_top = top_flat.at<cv::Vec3f>(0, x);
         const cv::Vec3f ep_bot = bot_edge.at<cv::Vec3f>(0, x);
         const cv::Vec3f fl_bot = bot_flat.at<cv::Vec3f>(0, x);
 
+        // 1. Sampled content rows.
+        if (R_first <= R_last) {
+            for (int R = R_first; R <= R_last; ++R) {
+                const cv::Vec3f v = sampleRowBilinear(pano, x, src_row[R], t, b);
+                out_f.at<cv::Vec3f>(R, x) = v;
+            }
+            if (R_first < summary_R_first) summary_R_first = R_first;
+            if (R_last  > summary_R_last)  summary_R_last  = R_last;
+        }
+
+        // 2. Top fill: canvas rows [0, R_first).
+        const int D_top = std::max(0, R_first);
         if (D_top > 0) {
             const int blur_rows = std::min(D_top, static_cast<int>(BR * D_top));
-            const float fade_denom = static_cast<float>(std::max(D_top - blur_rows - 1, 1));
+            const float fade_denom = static_cast<float>(
+                std::max(D_top - blur_rows - 1, 1));
             for (int r = 0; r < D_top; ++r) {
                 const int inner_r = D_top - 1 - r;
                 float alpha;
@@ -376,10 +303,13 @@ void fillTopBottomBlur(cv::Mat&        pano,
             }
         }
 
+        // 3. Bottom fill: canvas rows (R_last, H_target).
+        const int D_bot = std::max(0, H_target - 1 - R_last);
         if (D_bot > 0) {
             const int blur_rows = std::min(D_bot, static_cast<int>(BR * D_bot));
-            const float fade_denom = static_cast<float>(std::max(D_bot - blur_rows - 1, 1));
-            const int row_start = pad_top + b + 1;
+            const float fade_denom = static_cast<float>(
+                std::max(D_bot - blur_rows - 1, 1));
+            const int row_start = R_last + 1;
             for (int r = 0; r < D_bot; ++r) {
                 float alpha;
                 if (r < blur_rows) {
@@ -396,22 +326,24 @@ void fillTopBottomBlur(cv::Mat&        pano,
             }
         }
 
-        if (F > 0) {
-            const int content_height = b - t + 1;
+        // 4. Pano-side feather: blend sampled rows nearest the joins with
+        //    the edge profile so the fill→strip transition is smooth.
+        if (F > 0 && R_last > R_first) {
+            const int content_height = R_last - R_first + 1;
             const int actual_F = std::min(F, content_height / 2);
             if (actual_F > 0) {
                 const float denom = static_cast<float>(std::max(actual_F - 1, 1));
                 for (int r = 0; r < actual_F; ++r) {
                     const float tv = (actual_F == 1) ? 1.0f
-                                    : static_cast<float>(r) / denom;
+                                  : static_cast<float>(r) / denom;
                     {
-                        cv::Vec3f& dst = out_f.at<cv::Vec3f>(pad_top + t + r, x);
+                        cv::Vec3f& dst = out_f.at<cv::Vec3f>(R_first + r, x);
                         dst[0] = (1.0f - tv) * ep_top[0] + tv * dst[0];
                         dst[1] = (1.0f - tv) * ep_top[1] + tv * dst[1];
                         dst[2] = (1.0f - tv) * ep_top[2] + tv * dst[2];
                     }
                     {
-                        cv::Vec3f& dst = out_f.at<cv::Vec3f>(pad_top + b - r, x);
+                        cv::Vec3f& dst = out_f.at<cv::Vec3f>(R_last - r, x);
                         dst[0] = (1.0f - tv) * ep_bot[0] + tv * dst[0];
                         dst[1] = (1.0f - tv) * ep_bot[1] + tv * dst[1];
                         dst[2] = (1.0f - tv) * ep_bot[2] + tv * dst[2];
@@ -424,13 +356,27 @@ void fillTopBottomBlur(cv::Mat&        pano,
     cv::Mat out_u8;
     out_f.convertTo(out_u8, CV_8UC3);
 
-    std::cout << "Fill panorama (per-column): " << W << "x" << H
+    std::cout << "Fill panorama: " << W << "x" << H
               << "  ->  " << out_u8.cols << "x" << out_u8.rows
-              << "  (top_pad=" << pad_top << ", bot_pad=" << pad_bot
-              << ", crop_top=" << crop_top << ", crop_bot=" << crop_bot
-              << ", v_cam=" << std::fixed << std::setprecision(1)
-              << vertical_camera_deg << "deg"
-              << ", src=" << S << ", blur=" << K
+              << "  (mode=" << (cyl_remap ? "cyl-remap" : "legacy");
+    if (cyl_remap) {
+        // Strip's actual angular extent (taken at the column-wise widest
+        // valid range, summarised across the canvas).
+        const int R0 = std::max(0, std::min(H_target - 1, summary_R_first));
+        const int R1 = std::max(0, std::min(H_target - 1, summary_R_last));
+        const double phi_top_deg =
+            (H_target / 2.0 - 0.5 - R0) * 180.0 / H_target;
+        const double phi_bot_deg =
+            (H_target / 2.0 - 0.5 - R1) * 180.0 / H_target;
+        std::cout << ", cyl_f=" << std::fixed << std::setprecision(1) << cyl_focal
+                  << ", cyl_v_top=" << cyl_v_top_pano
+                  << ", strip_phi=[" << std::fixed << std::setprecision(1)
+                  << phi_bot_deg << ".." << phi_top_deg << "]deg";
+    } else {
+        std::cout << ", v_cam=" << std::fixed << std::setprecision(1)
+                  << vertical_camera_deg << "deg";
+    }
+    std::cout << ", src=" << S << ", blur=" << K
               << ", blur_ratio=" << std::fixed << std::setprecision(2) << BR
               << ", fade=" << F
               << ", fade_power=" << std::fixed << std::setprecision(2) << FP

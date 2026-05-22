@@ -115,9 +115,17 @@ struct StitcherOptions {
 
     // Phone vertical pose during capture, on the same 0..180 scale used by the
     // Flutter capture UI (90 = camera at the horizon, < 90 = camera tilted
-    // down, > 90 = camera tilted up). Controls how the total fill budget is
-    // split between top and bottom — see PanoramaFill.hpp. The 90° default
-    // produces the symmetric (top = bottom) split the legacy code always used.
+    // down, > 90 = camera tilted up).
+    //
+    // With wave correction enabled (the default) the fill stage recovers the
+    // strip's true vertical placement directly from the cylindrical focal
+    // length and the canvas's cyl-y origin, so this value is informational /
+    // logged only — passing 75 vs 60 vs 90 produces a byte-identical output.
+    //
+    // With wave correction disabled (or when the cylindrical geometry is
+    // otherwise unknown), the fill stage falls back to the legacy
+    // "paste 1:1 with a deg-biased offset" placement, where this value
+    // controls how much of the canvas above vs below the strip gets padded.
     double fill_vertical_camera_deg = 90.0;
 };
 

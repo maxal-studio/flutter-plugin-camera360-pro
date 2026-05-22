@@ -367,6 +367,13 @@ bool PanoramicStitcher::stitch(const std::vector<cv::Mat>&                 image
         sizes_full[i]   = roi.size();
     }
 
+    // Cylindrical-coordinate bounding box of the final blender canvas. Its
+    // top-left .y is the cyl-y value at the top of the composite (before any
+    // post-blend crop), which we forward into the fill stage so it can run a
+    // true cylindrical → equirect vertical remap. After wave correction the
+    // cylinder axis is world-up, so cyl-y = 0 is the world horizon.
+    const Rect canvas_cyl_roi = resultRoi(corners_full, sizes_full);
+
     Ptr<Blender> blender;
     Mat img_warped, img_warped_s;
     Mat dilated_mask, seam_mask, mask, mask_warped;
@@ -405,7 +412,7 @@ bool PanoramicStitcher::stitch(const std::vector<cv::Mat>&                 image
 
         if (!blender) {
             blender = makePtr<MultiBandBlender>(false);
-            Size canvas_size = resultRoi(corners_full, sizes_full).size();
+            const Size canvas_size = canvas_cyl_roi.size();
             float blend_width = std::sqrt(static_cast<float>(canvas_size.area()))
                               * opt_.blend_strength / 100.f;
             int n_bands = static_cast<int>(std::ceil(std::log(blend_width)
@@ -468,6 +475,10 @@ bool PanoramicStitcher::stitch(const std::vector<cv::Mat>&                 image
     }
 
     cv::Mat pano_mask;
+    // Track the cylindrical y-coordinate of the FINAL pano's row 0. The
+    // composite canvas's row 0 is at cyl-y `canvas_cyl_roi.y`; any post-blend
+    // crop adds its own .y offset on top.
+    int pano_cyl_y_top = canvas_cyl_roi.y;
     if (roi.width > 0 && roi.height > 0 &&
         roi.size() != result_8u.size()) {
         std::cout << "Cropping panorama: "
@@ -476,6 +487,7 @@ bool PanoramicStitcher::stitch(const std::vector<cv::Mat>&                 image
                   << "  (offset " << roi.x << "," << roi.y << ")\n";
         pano      = result_8u(roi).clone();
         pano_mask = mask_8u(roi).clone();
+        pano_cyl_y_top += roi.y;
     } else {
         pano      = result_8u;
         pano_mask = mask_8u;
@@ -484,12 +496,30 @@ bool PanoramicStitcher::stitch(const std::vector<cv::Mat>&                 image
     progress::set(progress::Stage::Finalize, 60);
 
     if (opt_.fill_enabled) {
+        // `warped_image_scale` is the cylindrical focal length used by the
+        // CylindricalWarper above. With wave-correction enabled (the
+        // default) the cylinder axis is world-up, so `pano_cyl_y_top` is the
+        // OpenCV cylindrical-y coordinate (image-y-down convention; v > 0 =
+        // below horizon) of the pano's row 0. Pass both into the fill stage
+        // so it can do a true cylindrical → equirect vertical remap instead
+        // of a row-1:1 paste with a `vertical_camera_deg` bias.
+        //
+        // When wave correction is disabled we still pass these but the
+        // remap will only be exact to the extent the bundle-adjustment ray
+        // cost happened to centre the cylinder axis on world-up; the deg
+        // parameter no longer biases placement in that path.
+        const double cyl_focal_for_fill =
+            opt_.wave_correct ? warped_image_scale : 0.0;
+        const double cyl_v_top_for_fill = static_cast<double>(pano_cyl_y_top);
+
         detail::fillTopBottomBlur(pano, pano_mask,
                           opt_.fill_target_ratio,
                           opt_.fill_source_px, opt_.fill_blur_kernel,
                           opt_.fill_fade_px, opt_.fill_blur_ratio,
                           opt_.fill_fade_power,
-                          opt_.fill_vertical_camera_deg);
+                          opt_.fill_vertical_camera_deg,
+                          cyl_focal_for_fill,
+                          cyl_v_top_for_fill);
         stage.log("fill");
     }
     progress::set(progress::Stage::Finalize, 100);
