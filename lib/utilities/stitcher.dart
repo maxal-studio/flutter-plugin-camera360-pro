@@ -6,6 +6,7 @@ import 'package:camera/camera.dart';
 import 'package:camera_360/camera_360_bindings_generated.dart';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show Color;
 import 'package:path_provider/path_provider.dart';
 
 /// Signature for the stitching progress callback delivered by
@@ -120,6 +121,10 @@ class _StitchParams {
     required this.fillBlurRatio,
     required this.fillFadePower,
     required this.fillVerticalCameraDeg,
+    required this.fillFlatUseEdge,
+    required this.fillFlatB,
+    required this.fillFlatG,
+    required this.fillFlatR,
     this.featuresBlob,
   });
 
@@ -142,6 +147,14 @@ class _StitchParams {
   // tilted up). Forwarded into the native fill stage to bias the top/bottom
   // padding split toward whichever side is missing more world content.
   final double fillVerticalCameraDeg;
+
+  /// When true, the outer fill colour is derived from the panorama edge
+  /// strip mean (legacy). When false, [fillFlatB]/[fillFlatG]/[fillFlatR]
+  /// are used instead (OpenCV BGR order).
+  final bool fillFlatUseEdge;
+  final int fillFlatB;
+  final int fillFlatG;
+  final int fillFlatR;
 
   /// Pre-computed keypoints + matches from the Dart-side ONNX feature
   /// pipeline. When non-null the worker isolate calls the
@@ -196,6 +209,10 @@ String _stitchSync(_StitchParams p) {
         p.fillBlurRatio,
         p.fillFadePower,
         p.fillVerticalCameraDeg,
+        p.fillFlatUseEdge,
+        p.fillFlatB,
+        p.fillFlatG,
+        p.fillFlatR,
       );
     } else {
       success = bindings.stitch(
@@ -214,6 +231,10 @@ String _stitchSync(_StitchParams p) {
         p.fillBlurRatio,
         p.fillFadePower,
         p.fillVerticalCameraDeg,
+        p.fillFlatUseEdge,
+        p.fillFlatB,
+        p.fillFlatG,
+        p.fillFlatR,
       );
     }
   } finally {
@@ -262,6 +283,10 @@ class Stitcher {
     // legacy default); deviations bias the fill toward whichever side is
     // missing more world content.
     double fillVerticalCameraDeg = 90.0,
+    // When null (default), the outer fill colour is the mean of the sampled
+    // edge strip. Set e.g. `Color(0xFF808080)` for neutral gray padding
+    // before depth-map conversion (da360 and similar pipelines).
+    Color? fillFlatColor,
     // Optional pre-computed keypoints + matches blob (see
     // ExternalFeatures.hpp for the byte layout). When non-null, routes the
     // FFI call through `stitch_with_features` and the `model` argument is
@@ -296,6 +321,10 @@ class Stitcher {
       fillBlurRatio: fillBlurRatio,
       fillFadePower: fillFadePower,
       fillVerticalCameraDeg: fillVerticalCameraDeg,
+      fillFlatUseEdge: fillFlatColor == null,
+      fillFlatB: fillFlatColor?.b.toInt() ?? 0,
+      fillFlatG: fillFlatColor?.g.toInt() ?? 0,
+      fillFlatR: fillFlatColor?.r.toInt() ?? 0,
       featuresBlob: featuresBlob,
     );
 

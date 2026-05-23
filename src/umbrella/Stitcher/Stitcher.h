@@ -51,6 +51,13 @@ extern "C"
     //                    an even split (legacy behaviour), 75 puts more
     //                    padding on top to recover the sky a downward-tilted
     //                    capture is missing, and so on.
+    //   fill_flat_use_edge
+    //                    When true (default), the outer fill colour is the
+    //                    mean of the sampled edge strip. When false, use
+    //                    fill_flat_b / fill_flat_g / fill_flat_r instead
+    //                    (OpenCV BGR order, each 0..255).
+    //   fill_flat_b, fill_flat_g, fill_flat_r
+    //                    Ignored when fill_flat_use_edge is true.
     bool stitch(const char *image_paths,
                 const char *model,
                 const char *out,
@@ -65,7 +72,11 @@ extern "C"
                 int         fill_fade,
                 double      fill_blur_ratio,
                 double      fill_fade_power,
-                double      fill_vertical_camera_deg);
+                double      fill_vertical_camera_deg,
+                bool        fill_flat_use_edge,
+                int         fill_flat_b,
+                int         fill_flat_g,
+                int         fill_flat_r);
 
     // Same as `stitch`, but uses externally-computed keypoints + matches
     // instead of running an OpenCV detector. Used by the Dart-side SuperPoint
@@ -96,7 +107,11 @@ extern "C"
                               int            fill_fade,
                               double         fill_blur_ratio,
                               double         fill_fade_power,
-                              double         fill_vertical_camera_deg);
+                              double         fill_vertical_camera_deg,
+                              bool           fill_flat_use_edge,
+                              int            fill_flat_b,
+                              int            fill_flat_g,
+                              int            fill_flat_r);
 
     // Read the live progress of the in-flight `stitch` or
     // `stitch_with_features` call. Polled from the Dart main isolate on

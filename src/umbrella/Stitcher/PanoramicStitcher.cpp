@@ -519,7 +519,11 @@ bool PanoramicStitcher::stitch(const std::vector<cv::Mat>&                 image
                           opt_.fill_fade_power,
                           opt_.fill_vertical_camera_deg,
                           cyl_focal_for_fill,
-                          cyl_v_top_for_fill);
+                          cyl_v_top_for_fill,
+                          opt_.fill_flat_use_edge_color,
+                          opt_.fill_flat_b,
+                          opt_.fill_flat_g,
+                          opt_.fill_flat_r);
         stage.log("fill");
     }
     progress::set(progress::Stage::Finalize, 100);

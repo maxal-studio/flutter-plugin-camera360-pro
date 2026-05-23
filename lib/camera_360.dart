@@ -182,6 +182,11 @@ class Camera360 extends StatefulWidget {
   /// Fade curve steepness toward flat colour (1.0 = linear).
   final double stitchFillFadePower;
 
+  /// Flat colour for the outer top/bottom fill fade. When null (default),
+  /// derived from the sampled edge strip. Set e.g. `Color(0xFF808080)` for
+  /// neutral gray padding before depth-map conversion.
+  final Color? stitchFillFlatColor;
+
   /// When true, shows a live orientation readout overlay during capture.
   /// See [debugInfoPosition] for placement. Defaults to false.
   final bool debug;
@@ -226,6 +231,7 @@ class Camera360 extends StatefulWidget {
     this.stitchFillFade = 50,
     this.stitchFillBlurRatio = 0.01,
     this.stitchFillFadePower = 5.0,
+    this.stitchFillFlatColor,
     this.debug = false,
     this.debugInfoPosition = DebugInfoPosition.topLeft,
     this.saveCapturedImages = false,
@@ -752,6 +758,7 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
       fillBlurRatio: widget.stitchFillBlurRatio,
       fillFadePower: widget.stitchFillFadePower,
       fillVerticalCameraDeg: deviceVerticalCorrectDeg,
+      fillFlatColor: widget.stitchFillFlatColor,
       featuresBlob: featuresBlob,
       onStitchProgress: _emitStitchProgress,
     );

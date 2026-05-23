@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include <opencv2/core.hpp>
@@ -90,7 +91,11 @@ void fillTopBottomBlur(cv::Mat&        pano,
                        double          fade_power,
                        double          vertical_camera_deg,
                        double          cyl_focal,
-                       double          cyl_v_top_pano)
+                       double          cyl_v_top_pano,
+                       bool            flat_use_edge_color,
+                       int             flat_b,
+                       int             flat_g,
+                       int             flat_r)
 {
     if (pano.empty()) {
         std::cerr << "Fill panorama: empty panorama, skipping\n";
@@ -240,12 +245,23 @@ void fillTopBottomBlur(cv::Mat&        pano,
     cv::GaussianBlur(bot_mean_f, bot_edge, cv::Size(K, 1), 0, 0,
                      cv::BORDER_REFLECT_101);
     {
-        const cv::Scalar top_avg = cv::mean(top_strip);
-        const cv::Scalar bot_avg = cv::mean(bot_strip);
-        top_flat = cv::Mat(1, W, CV_32FC3,
-                           cv::Scalar(top_avg[0], top_avg[1], top_avg[2]));
-        bot_flat = cv::Mat(1, W, CV_32FC3,
-                           cv::Scalar(bot_avg[0], bot_avg[1], bot_avg[2]));
+        const auto clamp_u8 = [](int v) {
+            return static_cast<double>(std::max(0, std::min(255, v)));
+        };
+        if (flat_use_edge_color) {
+            const cv::Scalar top_avg = cv::mean(top_strip);
+            const cv::Scalar bot_avg = cv::mean(bot_strip);
+            top_flat = cv::Mat(1, W, CV_32FC3,
+                               cv::Scalar(top_avg[0], top_avg[1], top_avg[2]));
+            bot_flat = cv::Mat(1, W, CV_32FC3,
+                               cv::Scalar(bot_avg[0], bot_avg[1], bot_avg[2]));
+        } else {
+            const cv::Scalar flat(clamp_u8(flat_b),
+                                  clamp_u8(flat_g),
+                                  clamp_u8(flat_r));
+            top_flat = cv::Mat(1, W, CV_32FC3, flat);
+            bot_flat = cv::Mat(1, W, CV_32FC3, flat);
+        }
     }
 
     // ── Allocate output canvas (float-precision; collapsed to u8 below) ──
@@ -380,6 +396,11 @@ void fillTopBottomBlur(cv::Mat&        pano,
               << ", blur_ratio=" << std::fixed << std::setprecision(2) << BR
               << ", fade=" << F
               << ", fade_power=" << std::fixed << std::setprecision(2) << FP
+              << ", flat=" << (flat_use_edge_color
+                  ? "edge"
+                  : ("bgr(" + std::to_string(flat_b) + "," +
+                               std::to_string(flat_g) + "," +
+                               std::to_string(flat_r) + ")"))
               << ")\n";
 
     pano = out_u8;

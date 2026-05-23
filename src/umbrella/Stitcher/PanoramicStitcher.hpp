@@ -127,6 +127,16 @@ struct StitcherOptions {
     // "paste 1:1 with a deg-biased offset" placement, where this value
     // controls how much of the canvas above vs below the strip gets padded.
     double fill_vertical_camera_deg = 90.0;
+
+    // Flat colour at the outer edge of the top/bottom fill fade. When true
+    // (the default) the colour is the mean of the sampled edge strip per
+    // side. When false, [fill_flat_b, fill_flat_g, fill_flat_r] is used for
+    // both sides — e.g. neutral gray (128,128,128) for depth-map pipelines
+    // where padded regions should read as "no data".
+    bool fill_flat_use_edge_color = true;
+    int  fill_flat_b = 128;
+    int  fill_flat_g = 128;
+    int  fill_flat_r = 128;
 };
 
 class PanoramicStitcher {

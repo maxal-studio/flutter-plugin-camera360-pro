@@ -70,6 +70,13 @@ class Camera360Bindings {
   /// an even split (legacy behaviour), 75 puts more
   /// padding on top to recover the sky a downward-tilted
   /// capture is missing, and so on.
+  /// fill_flat_use_edge
+  /// When true (default), the outer fill colour is the
+  /// mean of the sampled edge strip. When false, use
+  /// fill_flat_b / fill_flat_g / fill_flat_r instead
+  /// (OpenCV BGR order, each 0..255).
+  /// fill_flat_b, fill_flat_g, fill_flat_r
+  /// Ignored when fill_flat_use_edge is true.
   bool stitch(
     ffi.Pointer<ffi.Char> image_paths,
     ffi.Pointer<ffi.Char> model,
@@ -86,6 +93,10 @@ class Camera360Bindings {
     double fill_blur_ratio,
     double fill_fade_power,
     double fill_vertical_camera_deg,
+    bool fill_flat_use_edge,
+    int fill_flat_b,
+    int fill_flat_g,
+    int fill_flat_r,
   ) {
     return _stitch(
       image_paths,
@@ -103,6 +114,10 @@ class Camera360Bindings {
       fill_blur_ratio,
       fill_fade_power,
       fill_vertical_camera_deg,
+      fill_flat_use_edge,
+      fill_flat_b,
+      fill_flat_g,
+      fill_flat_r,
     );
   }
 
@@ -123,7 +138,11 @@ class Camera360Bindings {
               ffi.Int,
               ffi.Double,
               ffi.Double,
-              ffi.Double)>>('stitch');
+              ffi.Double,
+              ffi.Bool,
+              ffi.Int,
+              ffi.Int,
+              ffi.Int)>>('stitch');
   late final _stitch = _stitchPtr.asFunction<
       bool Function(
           ffi.Pointer<ffi.Char>,
@@ -140,7 +159,11 @@ class Camera360Bindings {
           int,
           double,
           double,
-          double)>();
+          double,
+          bool,
+          int,
+          int,
+          int)>();
 
   /// Same as `stitch`, but uses externally-computed keypoints + matches
   /// instead of running an OpenCV detector. Used by the Dart-side SuperPoint
@@ -173,6 +196,10 @@ class Camera360Bindings {
     double fill_blur_ratio,
     double fill_fade_power,
     double fill_vertical_camera_deg,
+    bool fill_flat_use_edge,
+    int fill_flat_b,
+    int fill_flat_g,
+    int fill_flat_r,
   ) {
     return _stitch_with_features(
       image_paths,
@@ -191,6 +218,10 @@ class Camera360Bindings {
       fill_blur_ratio,
       fill_fade_power,
       fill_vertical_camera_deg,
+      fill_flat_use_edge,
+      fill_flat_b,
+      fill_flat_g,
+      fill_flat_r,
     );
   }
 
@@ -212,7 +243,11 @@ class Camera360Bindings {
               ffi.Int,
               ffi.Double,
               ffi.Double,
-              ffi.Double)>>('stitch_with_features');
+              ffi.Double,
+              ffi.Bool,
+              ffi.Int,
+              ffi.Int,
+              ffi.Int)>>('stitch_with_features');
   late final _stitch_with_features = _stitch_with_featuresPtr.asFunction<
       bool Function(
           ffi.Pointer<ffi.Char>,
@@ -230,7 +265,11 @@ class Camera360Bindings {
           int,
           double,
           double,
-          double)>();
+          double,
+          bool,
+          int,
+          int,
+          int)>();
 
   /// Read the live progress of the in-flight `stitch` or
   /// `stitch_with_features` call. Polled from the Dart main isolate on

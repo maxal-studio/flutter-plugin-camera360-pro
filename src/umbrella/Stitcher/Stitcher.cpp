@@ -128,7 +128,11 @@ camera360::StitcherOptions makeOptions(bool        loop_360,
                                        int         fill_fade,
                                        double      fill_blur_ratio,
                                        double      fill_fade_power,
-                                       double      fill_vertical_camera_deg)
+                                       double      fill_vertical_camera_deg,
+                                       bool        fill_flat_use_edge,
+                                       int         fill_flat_b,
+                                       int         fill_flat_g,
+                                       int         fill_flat_r)
 {
     camera360::StitcherOptions opt;
     applyCrop(crop, opt);
@@ -142,6 +146,10 @@ camera360::StitcherOptions makeOptions(bool        loop_360,
     opt.fill_blur_ratio           = fill_blur_ratio;
     opt.fill_fade_power           = fill_fade_power;
     opt.fill_vertical_camera_deg  = fill_vertical_camera_deg;
+    opt.fill_flat_use_edge_color  = fill_flat_use_edge;
+    opt.fill_flat_b               = fill_flat_b;
+    opt.fill_flat_g               = fill_flat_g;
+    opt.fill_flat_r               = fill_flat_r;
     return opt;
 }
 
@@ -207,7 +215,11 @@ extern "C" bool stitch(const char *image_paths,
                        int         fill_fade,
                        double      fill_blur_ratio,
                        double      fill_fade_power,
-                       double      fill_vertical_camera_deg)
+                       double      fill_vertical_camera_deg,
+                       bool        fill_flat_use_edge,
+                       int         fill_flat_b,
+                       int         fill_flat_g,
+                       int         fill_flat_r)
 {
     using Clock = std::chrono::steady_clock;
 
@@ -247,7 +259,8 @@ extern "C" bool stitch(const char *image_paths,
 
         const camera360::StitcherOptions opt = makeOptions(
             loop_360, loop_closure, crop, fill, fill_ratio, fill_source, fill_blur,
-            fill_fade, fill_blur_ratio, fill_fade_power, fill_vertical_camera_deg);
+            fill_fade, fill_blur_ratio, fill_fade_power, fill_vertical_camera_deg,
+            fill_flat_use_edge, fill_flat_b, fill_flat_g, fill_flat_r);
 
         ok = composeAndWrite(images, std::move(features),
                              std::move(pairwise_matches),
@@ -278,7 +291,11 @@ extern "C" bool stitch_with_features(const char    *image_paths,
                                      int            fill_fade,
                                      double         fill_blur_ratio,
                                      double         fill_fade_power,
-                                     double         fill_vertical_camera_deg)
+                                     double         fill_vertical_camera_deg,
+                                     bool           fill_flat_use_edge,
+                                     int            fill_flat_b,
+                                     int            fill_flat_g,
+                                     int            fill_flat_r)
 {
     using Clock = std::chrono::steady_clock;
 
@@ -325,7 +342,8 @@ extern "C" bool stitch_with_features(const char    *image_paths,
 
         const camera360::StitcherOptions opt = makeOptions(
             loop_360, loop_closure, crop, fill, fill_ratio, fill_source, fill_blur,
-            fill_fade, fill_blur_ratio, fill_fade_power, fill_vertical_camera_deg);
+            fill_fade, fill_blur_ratio, fill_fade_power, fill_vertical_camera_deg,
+            fill_flat_use_edge, fill_flat_b, fill_flat_g, fill_flat_r);
 
         ok = composeAndWrite(images, std::move(features),
                              std::move(pairwise_matches),

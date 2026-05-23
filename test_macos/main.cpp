@@ -52,6 +52,10 @@ struct Args {
     // (90 = camera at the horizon, < 90 = tilted down, > 90 = tilted up).
     // Biases the top/bottom fill split — 90 gives the legacy symmetric split.
     double      fill_vertical_camera_deg = 90.0;
+    bool        fill_flat_use_edge      = true;
+    int         fill_flat_b             = 128;
+    int         fill_flat_g             = 128;
+    int         fill_flat_r             = 128;
 };
 
 // ── CLI parsing ──────────────────────────────────────────────────────────────
@@ -80,6 +84,11 @@ void printUsage(const char* prog) {
         << "                    phone pose during capture, 0..180 scale\n"
         << "                    (90 = horizon, <90 = tilted down, >90 = tilted up)\n"
         << "                    default 90 → symmetric top/bottom split\n"
+        << "  --fill-flat-gray  use fixed 128,128,128 BGR flat fill (not edge mean)\n"
+        << "  --fill-flat-b B   flat fill blue  channel 0..255 (with --no-fill-flat-edge)\n"
+        << "  --fill-flat-g G   flat fill green channel 0..255\n"
+        << "  --fill-flat-r R   flat fill red   channel 0..255\n"
+        << "  --no-fill-flat-edge  use --fill-flat-b/g/r instead of edge mean\n"
         << "  -h, --help        show this message\n";
 }
 
@@ -135,6 +144,26 @@ bool parseArgs(int argc, char** argv, Args& a) {
             if (a.fill_vertical_camera_deg < 0.0 || a.fill_vertical_camera_deg > 180.0) {
                 std::cerr << "--fill-vertical-camera-deg must be in [0, 180]\n"; return false;
             }
+        }
+        else if (s == "--fill-flat-gray") {
+            a.fill_flat_use_edge = false;
+            a.fill_flat_b = a.fill_flat_g = a.fill_flat_r = 128;
+        }
+        else if (s == "--no-fill-flat-edge") { a.fill_flat_use_edge = false; }
+        else if (s == "--fill-flat-b") {
+            if (!next(tmp)) return false;
+            a.fill_flat_use_edge = false;
+            a.fill_flat_b = std::stoi(tmp);
+        }
+        else if (s == "--fill-flat-g") {
+            if (!next(tmp)) return false;
+            a.fill_flat_use_edge = false;
+            a.fill_flat_g = std::stoi(tmp);
+        }
+        else if (s == "--fill-flat-r") {
+            if (!next(tmp)) return false;
+            a.fill_flat_use_edge = false;
+            a.fill_flat_r = std::stoi(tmp);
         }
         else if (s == "-h" || s == "--help") { printUsage(argv[0]); return false; }
         else { std::cerr << "Unknown argument: " << s << "\n"; return false; }
@@ -237,7 +266,11 @@ int main(int argc, char** argv) {
         args.fill_fade,
         args.fill_blur_ratio,
         args.fill_fade_power,
-        args.fill_vertical_camera_deg
+        args.fill_vertical_camera_deg,
+        args.fill_flat_use_edge,
+        args.fill_flat_b,
+        args.fill_flat_g,
+        args.fill_flat_r
     );
 
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(

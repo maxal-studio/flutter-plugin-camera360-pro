@@ -45,6 +45,11 @@
 //   outer remainder                                  → alpha = 1 - (1 - g)^fade_power
 //   row = (1 - alpha) * edge_profile + alpha * flat_colour
 //
+// The flat colour at the outer edge of each fill band is either derived from
+// the mean of the sampled edge strip (`flat_use_edge_color = true`, the
+// legacy default) or a caller-supplied BGR triple (`flat_use_edge_color =
+// false`, useful for neutral gray padding before depth-map conversion).
+//
 // Pano-side feather (`fade_px` rows nearest the seam) blends real sampled
 // content with `edge_profile` over the seam.
 
@@ -72,7 +77,11 @@ void fillTopBottomBlur(cv::Mat&        pano,
                        double          fade_power,           // fade curve steepness (1 = linear)
                        double          vertical_camera_deg = 90.0,  // 0..180, 90 = horizon
                        double          cyl_focal           = 0.0,   // <= 0 = legacy placement
-                       double          cyl_v_top_pano      = 0.0);  // cyl-y of pano row 0 (when cyl_focal>0)
+                       double          cyl_v_top_pano      = 0.0,   // cyl-y of pano row 0 (when cyl_focal>0)
+                       bool            flat_use_edge_color = true,  // false → use flat_b/g/r
+                       int             flat_b              = 128,   // OpenCV BGR when !flat_use_edge_color
+                       int             flat_g              = 128,
+                       int             flat_r              = 128);
 
 }  // namespace detail
 }  // namespace camera360
