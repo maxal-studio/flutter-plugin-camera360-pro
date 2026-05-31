@@ -82,7 +82,6 @@ class _CameraPageState extends State<CameraPage> {
           helperText: 'Point the camera at the dot',
           tiltLeftText: 'Tilt left',
           tiltRightText: 'Tilt right',
-          cameraSelectorShow: true,
           cameraSelectorInfoPopUpShow: true,
           cameraSelectorInfoPopUpContent: const Column(
             children: [

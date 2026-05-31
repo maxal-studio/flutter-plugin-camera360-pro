@@ -80,7 +80,7 @@ Camera360(
   tiltRightText: 'Tilt right',
 
   // ── Camera selector UI ──────────────────────────────────────────────────────
-  cameraSelectorShow: true,
+
   cameraSelectorInfoPopUpShow: true,
 
   // ── Stitching (native OpenCV pipeline) ─────────────────────────────────────
@@ -116,21 +116,21 @@ Camera360(
 
 ## Capture options
 
-| Parameter             | Type      | Default                         | Description                                                        |
-| --------------------- | --------- | ------------------------------- | ------------------------------------------------------------------ |
-| `photoCount`          | `int?`    | `16`                            | Number of frames captured in a full 360° rotation                  |
-| `captureVerticalDeg`  | `double`  | `90`                            | Vertical angle the device should be held at (0..180; 90 = horizon) |
-| `captureImageWidth`   | `int?`    | `1000`                          | Width each captured frame is resized to before stitching           |
-| `captureImageQuality` | `int?`    | `50`                            | JPEG quality for frame resize (1–100)                              |
-| `loadingText`         | `String?` | `'Preparing panorama...'`       | Fallback label before stitch progress starts (see Stitch progress) |
-| `helperText`          | `String?` | `'Point the camera at the dot'` | Instruction text during capture                                    |
-| `tiltLeftText`        | `String?` | `'Tilt left'`                   | Text shown when the device needs tilting left                      |
-| `tiltRightText`       | `String?` | `'Tilt right'`                  | Text shown when the device needs tilting right                     |
-| `debug`               | `bool`    | `false`                         | Show live orientation readouts (horizontal, target, vertical, tilt) during capture |
-| `debugInfoPosition`   | `DebugInfoPosition` | `DebugInfoPosition.topLeft` | Corner and inset for the debug overlay (see below)                 |
-| `saveCapturedImages`  | `bool`    | `false`                         | Copy each captured frame to the device photo gallery before cache cleanup |
-| `captureStartButtonBuilder` | `CaptureStartButtonBuilder?` | `null` (built-in shutter button) | Custom start-capture control shown before capture begins |
-| `captureResetButtonBuilder` | `CaptureResetButtonBuilder?` | `null` (built-in dark Reset) | Custom reset control during capture; pass [hideCaptureResetButton] to hide |
+| Parameter                   | Type                         | Default                          | Description                                                                        |
+| --------------------------- | ---------------------------- | -------------------------------- | ---------------------------------------------------------------------------------- |
+| `photoCount`                | `int?`                       | `16`                             | Number of frames captured in a full 360° rotation                                  |
+| `captureVerticalDeg`        | `double`                     | `90`                             | Vertical angle the device should be held at (0..180; 90 = horizon)                 |
+| `captureImageWidth`         | `int?`                       | `1000`                           | Width each captured frame is resized to before stitching                           |
+| `captureImageQuality`       | `int?`                       | `50`                             | JPEG quality for frame resize (1–100)                                              |
+| `loadingText`               | `String?`                    | `'Preparing panorama...'`        | Fallback label before stitch progress starts (see Stitch progress)                 |
+| `helperText`                | `String?`                    | `'Point the camera at the dot'`  | Instruction text during capture                                                    |
+| `tiltLeftText`              | `String?`                    | `'Tilt left'`                    | Text shown when the device needs tilting left                                      |
+| `tiltRightText`             | `String?`                    | `'Tilt right'`                   | Text shown when the device needs tilting right                                     |
+| `debug`                     | `bool`                       | `false`                          | Show live orientation readouts (horizontal, target, vertical, tilt) during capture |
+| `debugInfoPosition`         | `DebugInfoPosition`          | `DebugInfoPosition.topLeft`      | Corner and inset for the debug overlay (see below)                                 |
+| `saveCapturedImages`        | `bool`                       | `false`                          | Copy each captured frame to the device photo gallery before cache cleanup          |
+| `captureStartButtonBuilder` | `CaptureStartButtonBuilder?` | `null` (built-in shutter button) | Custom start-capture control shown before capture begins                           |
+| `captureResetButtonBuilder` | `CaptureResetButtonBuilder?` | `null` (built-in dark Reset)     | Custom reset control during capture; pass [hideCaptureResetButton] to hide         |
 
 ### Capture control buttons
 
