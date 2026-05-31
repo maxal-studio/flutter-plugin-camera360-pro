@@ -3,7 +3,10 @@ export 'package:camera_360/utilities/stitcher.dart'
 export 'package:camera_360/layouts/orientation_info.dart'
     show DebugInfoAlignment, DebugInfoPosition;
 export 'package:camera_360/layouts/capture_control_buttons.dart'
-    show DefaultCaptureResetButton, DefaultCaptureStartButton, hideCaptureResetButton;
+    show
+        DefaultCaptureResetButton,
+        DefaultCaptureStartButton,
+        hideCaptureResetButton;
 
 import 'package:camera_360/layouts/capture_control_buttons.dart';
 import 'package:camera_360/layouts/camera_selector.dart';
@@ -106,9 +109,6 @@ class Camera360 extends StatefulWidget {
   /// This popup is shown to help the user select a camera
   final bool cameraSelectorInfoPopUpShow;
 
-  /// cameraSelector popup visibility
-  final bool cameraSelectorShow;
-
   /// cameraSelector popup content [Widget]
   final Widget? cameraSelectorInfoPopUpContent;
 
@@ -206,7 +206,6 @@ class Camera360 extends StatefulWidget {
     this.helperText,
     this.tiltLeftText,
     this.tiltRightText,
-    this.cameraSelectorShow = true,
     this.cameraSelectorInfoPopUpShow = true,
     this.cameraSelectorInfoPopUpContent,
     this.cameraNotReadyContent,
@@ -1189,15 +1188,15 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
                   ? Stack(
                       children: [
                         Positioned.fill(
-                          child:
-                              FullScreenCameraPreview(controller: activeController),
+                          child: FullScreenCameraPreview(
+                              controller: activeController),
                         ),
                         Column(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
                             _buildCaptureStartButton(),
-                            widget.cameraSelectorShow == true &&
-                                    !_hasWideOrUltraWideCamera
+                            // Show only if there are multiple cameras and the camera is not wide or ultra wide
+                            cameras.length > 1 && !_hasWideOrUltraWideCamera
                                 ? CameraSelector(
                                     cameras: cameras,
                                     selectedCameraKey: selectedCameraKey,
@@ -1301,13 +1300,14 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
                 ? Stack(
                     children: [
                       Positioned.fill(
-                        child: FullScreenCameraPreview(controller: activeController),
+                        child: FullScreenCameraPreview(
+                            controller: activeController),
                       ),
                       Column(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          widget.cameraSelectorShow == true &&
-                                  !_hasWideOrUltraWideCamera
+                          // Show only if there are multiple cameras and the camera is not wide or ultra wide
+                          cameras.length > 1 && !_hasWideOrUltraWideCamera
                               ? CameraSelector(
                                   cameras: cameras,
                                   selectedCameraKey: selectedCameraKey,
