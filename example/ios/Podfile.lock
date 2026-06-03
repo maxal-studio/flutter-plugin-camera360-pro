@@ -99,7 +99,7 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/wakelock_plus/ios"
 
 SPEC CHECKSUMS:
-  camera_360: f51c43b43ae0498bdf37db2a9196afcaf8896fe3
+  camera_360: ade7326b8aede2caf6d6864fceb7226b2f052d90
   camera_avfoundation: 968a9a5323c79a99c166ad9d7866bfd2047b5a9b
   dchs_motion_sensors: 1225b0995751d926daff45544e00a256f543065c
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467

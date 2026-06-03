@@ -13,19 +13,14 @@ Flutter 360 Camera
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'MaxAl' => 'info@max.al' }
 
-  # This will ensure the source files in Classes/ are included in the native
-  # builds of apps using this FFI plugin. Podspec does not support relative
-  # paths, so Classes contains a forwarder C file that relatively imports
-  # `../src/*` so that the C sources can be shared among all target platforms.
   s.source           = { :path => '.' }
-  # s.source_files = 'Classes/**/*{cpp,h}'
+  s.source_files     = 'Classes/Camera360Plugin.swift'
   s.dependency 'Flutter'
-  s.platform = :ios, '11.0'
-  s.ios.deployment_target = '11.0'
- 
-  s.vendored_frameworks = 'camera_360.framework'
+  s.platform = :ios, '16.0'
+  s.ios.deployment_target = '16.0'
 
-  # Flutter.framework does not contain a i386 slice.
+  s.vendored_frameworks = 'camera_360.xcframework'
+
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
   s.swift_version = '5.0'
 end

@@ -39,10 +39,17 @@ sh prebuild.sh
 
 ## iOS
 
+The iOS build produces `ios/camera_360.xcframework` with two slices:
+
+- **Device (`ios-arm64`)** — full OpenCV-based stitcher, built in **Release** with an embedded dSYM inside the xcframework (`ios-arm64/dSYMs/`).
+- **Simulator (`ios-arm64_x86_64-simulator`)** — a tiny link-time stub only (no OpenCV). The Dart layer detects the simulator and shows a placeholder UI instead of running capture/stitching.
+
 ```properties
-cd /ios/
+cd src/ios
 sh build.sh
 ```
+
+The script removes any stale `ios/camera_360.framework` output, verifies the device dSYM is embedded in the xcframework (`DebugSymbolsPath = dSYMs` in `Info.plist`), and writes `ios/camera_360.xcframework`. Commit the xcframework after rebuilding.
 
 ### And the last step is to generate the Binding and install PODS
 

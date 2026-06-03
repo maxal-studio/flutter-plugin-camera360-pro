@@ -57,7 +57,7 @@ flutter:
         ffiPlugin: true
       ios:
         ffiPlugin: true
-        # pluginClass: Camera360Plugin
+        pluginClass: Camera360Plugin
 
   # To add assets to your plugin package, add an assets section, like this:
   assets:

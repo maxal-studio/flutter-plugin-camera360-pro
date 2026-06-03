@@ -20,7 +20,7 @@ find_package(OpenCV REQUIRED HINTS ${opencv})
 
 set(CMAKE_CXX_STANDARD 17) #set c++ language standart
 
-set(CMAKE_OSX_DEPLOYMENT_TARGET 11)
+set(CMAKE_OSX_DEPLOYMENT_TARGET 12)
 
 set(FLUTTER_UMBRELLA
   ${umbrella}/Stitcher/Stitcher.cpp
@@ -45,10 +45,6 @@ set(FLUTTER_UMBRELLA_PUBLIC
 	${umbrella}/Stitcher/Stitcher.h
 )
 
-set(CMAKE_INSTALL_PREFIX
-	${CMAKE_CURRENT_SOURCE_DIR}/../../ios
-)
-
 ###Build a shared library with our umbrella clases and opencv
 add_library(${CMAKE_PROJECT_NAME} SHARED
 	${FLUTTER_UMBRELLA}
@@ -62,12 +58,6 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
 target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
     ${umbrella}
 )
-## compile option nessessary to build propper framework
-target_compile_options(${CMAKE_PROJECT_NAME}
-  PUBLIC
-    "-fembed-bitcode"
-  )
-
 # https://cmake.org/cmake/help/latest/prop_tgt/MACOSX_FRAMEWORK_INFO_PLIST.html
 
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
@@ -78,6 +68,9 @@ set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
 	MACOSX_FRAMEWORK_SHORT_VERSION_STRING 1.0.4
 	VERSION 1.0.4
 	SOVERSION 1.0.4
+	XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym"
+	XCODE_ATTRIBUTE_BUILD_LIBRARY_FOR_DISTRIBUTION YES
+	XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH NO
 #For release build add your credentials
 	#XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY ""
 	#XCODE_ATTRIBUTE_DEVELOPMENT_TEAM ""

@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 
+import 'package:camera_360/utilities/ios_platform.dart';
+import 'package:camera_360/utilities/native_library.dart';
 import 'package:camera/camera.dart';
 import 'package:camera_360/camera_360_bindings_generated.dart';
 import 'package:ffi/ffi.dart';
@@ -53,10 +55,7 @@ String _stageLabel(int id) {
 Camera360Bindings? _mainIsoBindings;
 Camera360Bindings _mainIsolateBindings() {
   if (_mainIsoBindings != null) return _mainIsoBindings!;
-  final dylib = Platform.isAndroid
-      ? DynamicLibrary.open('libcamera_360.so')
-      : DynamicLibrary.process();
-  return _mainIsoBindings = Camera360Bindings(dylib);
+  return _mainIsoBindings = Camera360Bindings(openCamera360Library());
 }
 
 /// Feature pipeline passed to the native stitcher.
@@ -155,11 +154,7 @@ class _StitchParams {
 /// Returns [_StitchParams.outPath] on success; throws on failure.
 String _stitchSync(_StitchParams p) {
   // DynamicLibrary must be opened inside the isolate that will use it.
-  final dylib = Platform.isAndroid
-      ? DynamicLibrary.open("libcamera_360.so")
-      : DynamicLibrary.process();
-
-  final bindings = Camera360Bindings(dylib);
+  final bindings = Camera360Bindings(openCamera360Library());
 
   final Pointer<Utf8> imagesPtr = p.imagePaths.toString().toNativeUtf8();
   final Pointer<Utf8> modelPtr = p.model.toNativeUtf8();
@@ -235,6 +230,29 @@ String _stitchSync(_StitchParams p) {
 }
 
 class Stitcher {
+  static bool? _nativeStitcherAvailable;
+
+  /// Whether the native OpenCV stitcher is available on this platform.
+  ///
+  /// Returns false on the iOS Simulator where only a link-time stub is
+  /// shipped. The result is cached after the first check.
+  static Future<bool> get isNativeStitcherAvailable async {
+    if (_nativeStitcherAvailable != null) {
+      return _nativeStitcherAvailable!;
+    }
+    if (Platform.isIOS && await IosPlatform.isSimulator) {
+      return _nativeStitcherAvailable = false;
+    }
+    try {
+      openCamera360Library().lookup('stitch');
+      return _nativeStitcherAvailable = true;
+    } catch (e, st) {
+      debugPrint('Stitcher: native library unavailable: $e');
+      debugPrint('$st');
+      return _nativeStitcherAvailable = false;
+    }
+  }
+
   /// Stitch [images] into a 360 panorama using one of OpenCV's built-in
   /// feature detectors, or — when [featuresBlob] is supplied — feed
   /// pre-computed keypoints + matches directly to the native composer
@@ -274,6 +292,13 @@ class Stitcher {
     // matching (0..65) emitted by [OnnxFeaturePipeline].
     StitchProgressCallback? onStitchProgress,
   }) async {
+    if (!await isNativeStitcherAvailable) {
+      throw UnsupportedError(
+        'Native panorama stitching is unavailable on the iOS Simulator. '
+        'Use a physical iOS device to test stitching.',
+      );
+    }
+
     // getApplicationDocumentsDirectory uses a platform channel — must be
     // called on the main isolate before spawning the worker.
     final dir = await getApplicationDocumentsDirectory();

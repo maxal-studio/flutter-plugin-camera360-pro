@@ -1,0 +1,5 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     '/Users/dajanvulaj/Flutter/flutter-plugin-camera360/src/ios/build/Release-iphoneos/camera_360.framework/camera_360'
+relocations:     []
+...

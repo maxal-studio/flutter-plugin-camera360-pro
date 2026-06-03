@@ -7,7 +7,7 @@ pushd src/android
 sh build.sh
 popd
 
-# Build the iOS framework
+# Build the iOS xcframework
 pushd src/ios
 sh build.sh
 popd

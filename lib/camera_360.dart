@@ -15,6 +15,7 @@ import 'package:camera_360/layouts/helper_text.dart';
 import 'package:camera_360/layouts/orientation_helpers.dart';
 import 'package:camera_360/layouts/orientation_info.dart';
 import 'package:camera_360/layouts/stitching_progress_overlay.dart';
+import 'package:camera_360/utilities/ios_platform.dart';
 import 'package:camera_360/utilities/onnx_feature_pipeline.dart';
 import 'package:camera_360/utilities/stitcher.dart';
 import 'package:flutter/material.dart';
@@ -331,6 +332,12 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
   /// Bumped at each stitch so [StitchingProgressOverlay] resets its bar once.
   int _stitchRunId = 0;
 
+  /// True after [initState] detects the iOS Simulator.
+  bool _runningOnSimulator = false;
+
+  /// True on iOS while waiting for the native simulator probe to finish.
+  bool _simulatorCheckPending = false;
+
   // Add this field at the top of the class with other variables
   Timer? _waitingTimer;
   // Panorama capture runs only after the user presses the start button
@@ -363,6 +370,27 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
     helperTiltLeftText = widget.tiltLeftText ?? 'Tilt left';
     helperTiltRightText = widget.tiltRightText ?? 'Tilt right';
 
+    if (Platform.isIOS) {
+      _simulatorCheckPending = true;
+      IosPlatform.isSimulator.then((simulator) {
+        if (!mounted) return;
+        setState(() {
+          _runningOnSimulator = simulator;
+          _simulatorCheckPending = false;
+        });
+        if (!simulator) {
+          _setupCameras();
+        }
+      }).catchError((Object e) {
+        debugPrint('Camera360: simulator probe failed: $e');
+        if (!mounted) return;
+        setState(() => _simulatorCheckPending = false);
+        _setupCameras();
+      });
+    } else {
+      _setupCameras();
+    }
+
     // Pre-warm the ONNX model path so it is ready before the first stitch.
     if (widget.stitchModel == StitchFeatureModel.onnx &&
         widget.onnxModelAssetKey != null &&
@@ -374,8 +402,37 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
         debugPrint('Camera360: failed to extract ONNX model: $e');
       });
     }
+  }
 
-    _setupCameras();
+  Widget _buildSimulatorPlaceholder() {
+    return widget.cameraNotReadyContent ??
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.phone_iphone, color: Colors.white70, size: 48),
+              SizedBox(height: 16),
+              Text(
+                'Simulator preview mode',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 12),
+              Text(
+                'The 360 camera UI cannot run on the iOS Simulator. '
+                'Connect a physical iPhone or iPad to test capture, '
+                'orientation guidance, and stitching.',
+                style: TextStyle(color: Colors.white70, height: 1.4),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        );
   }
 
   // Delete files and cache before restarting app
@@ -991,6 +1048,15 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
       if (isPanoramaBeingStitched == false) {
         isPanoramaBeingStitched = true;
 
+        if (_runningOnSimulator) {
+          debugPrint(
+            'Camera360: skipping native stitch on iOS Simulator',
+          );
+          isPanoramaBeingStitched = false;
+          prepareOnCaptureEnded(null);
+          return;
+        }
+
         // All pictures have been captured — report 100% before stitching starts.
         if (progressPercentage != 100) {
           progressPercentage = 100;
@@ -1099,6 +1165,26 @@ class _Camera360State extends State<Camera360> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (_simulatorCheckPending) {
+      return widget.cameraNotReadyContent ??
+          const Center(
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 10, vertical: 20),
+              child: Text(
+                'Camera loading...',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          );
+    }
+
+    if (_runningOnSimulator) {
+      return ColoredBox(
+        color: Colors.black,
+        child: Center(child: _buildSimulatorPlaceholder()),
+      );
+    }
+
     final CameraController? activeController = _controller;
     if (!_isReady || activeController == null) {
       return widget.cameraNotReadyContent ??
